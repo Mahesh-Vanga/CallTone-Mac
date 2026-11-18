@@ -27,6 +27,7 @@ struct RingtoneLibraryView: View {
     var body: some View {
         VStack(spacing: 0) {
             toolbarHeader
+            rotationControls
             if let error = library.lastError {
                 HStack {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -92,6 +93,27 @@ struct RingtoneLibraryView: View {
                 uiState.renamingItem = nil
             }
         }
+    }
+
+    private var rotationControls: some View {
+        HStack(spacing: 12) {
+            Picker("Incoming Call Ringtone", selection: $settings.ringtoneRotation.mode) {
+                ForEach(RingtoneRotation.Mode.allCases, id: \.self) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
+            }
+            .fixedSize()
+
+            if settings.ringtoneRotation.mode != .single {
+                let count = settings.ringtoneRotation.available(in: library.ringtones).toneIDs.count
+                Text(count == 0 ? "Select tones to rotate between calls." : "\(count) selected")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 10)
     }
 
     private var toolbarHeader: some View {
@@ -175,8 +197,28 @@ struct RingtoneLibraryView: View {
     private func ringtoneRow(_ item: RingtoneItem) -> some View {
         let isGlobal = settings.globalRingtoneID == item.id
         let isPlayingThis = player.isPlaying && player.activeRingtoneID == item.id
+        let mode = settings.ringtoneRotation.mode
+        let position = settings.ringtoneRotation.toneIDs.firstIndex(of: item.id)
 
         return HStack(spacing: 14) {
+            if mode != .single {
+                Toggle(isOn: Binding(
+                    get: { settings.ringtoneRotation.toneIDs.contains(item.id) },
+                    set: { selected in
+                        if selected {
+                            settings.ringtoneRotation.toneIDs.append(item.id)
+                        } else {
+                            settings.ringtoneRotation.toneIDs.removeAll { $0 == item.id }
+                        }
+                    }
+                )) {
+                    Text("Include \(item.name) in rotation")
+                }
+                .toggleStyle(.checkbox)
+                .labelsHidden()
+                .help("Include in ringtone rotation")
+            }
+
             Button {
                 if isPlayingThis {
                     player.stop()
@@ -200,7 +242,12 @@ struct RingtoneLibraryView: View {
                 HStack(spacing: 8) {
                     Text(item.name)
                         .font(.headline)
-                    if isGlobal {
+                    if mode == .sequential, let position {
+                        Text("Position \(position + 1)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if isGlobal && mode == .single {
                         Text("Global Default")
                             .font(.caption2.weight(.semibold))
                             .padding(.horizontal, 7)
@@ -233,9 +280,9 @@ struct RingtoneLibraryView: View {
 
             Spacer()
 
-            if !isGlobal {
+            if !isGlobal && mode == .single {
                 Button("Set Global") {
-                    settings.globalRingtoneID = item.id
+                    settings.setSingleRingtone(item.id)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -250,8 +297,20 @@ struct RingtoneLibraryView: View {
             .controlSize(.small)
 
             Menu {
-                Button("Set as Global Ringtone") {
-                    settings.globalRingtoneID = item.id
+                Button(mode == .single ? "Set as Global Ringtone" : "Use as Single Ringtone") {
+                    settings.setSingleRingtone(item.id)
+                }
+
+                if mode == .sequential, let position {
+                    Button("Move Earlier in Sequence") {
+                        settings.ringtoneRotation.move(item.id, by: -1)
+                    }
+                    .disabled(position == 0)
+
+                    Button("Move Later in Sequence") {
+                        settings.ringtoneRotation.move(item.id, by: 1)
+                    }
+                    .disabled(position == settings.ringtoneRotation.toneIDs.count - 1)
                 }
 
                 Menu("Assign to Calling App") {

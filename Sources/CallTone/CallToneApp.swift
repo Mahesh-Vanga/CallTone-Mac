@@ -47,7 +47,8 @@ final class AppCore {
             settings: settingsStore,
             library: libraryManager,
             suppression: suppressionEngine,
-            player: ringtonePlayer
+            player: ringtonePlayer,
+            devices: deviceManager
         )
 
         menuBarController.configure(

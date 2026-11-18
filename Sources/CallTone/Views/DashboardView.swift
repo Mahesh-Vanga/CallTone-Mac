@@ -17,6 +17,10 @@ struct DashboardView: View {
         library.ringtones.first { $0.id == settings.globalRingtoneID }
     }
 
+    private var rotation: RingtoneRotation {
+        settings.ringtoneRotation.available(in: library.ringtones)
+    }
+
     private var enabledApps: [CallingApp] {
         settings.callingApps.filter { $0.isEnabled }
     }
@@ -147,7 +151,7 @@ struct DashboardView: View {
         HStack(spacing: 12) {
             metricTile(title: "Calling Apps", value: "\(enabledApps.count)/\(settings.callingApps.count) Active", icon: "phone.connection", color: .blue)
             metricTile(title: "Ringtone Library", value: "\(library.ringtones.count) Tones", icon: "music.note.list", color: .purple)
-            metricTile(title: "Tap Muting", value: settings.suppressOriginalRingtone ? "Enabled" : "Off", icon: "speaker.slash.fill", color: settings.suppressOriginalRingtone ? .green : .secondary)
+            metricTile(title: "Tap Muting", value: "Automatic", icon: "speaker.slash.fill", color: .green)
             metricTile(title: "Output Route", value: settings.selectedOutputDeviceUID == nil ? "Default" : "Custom", icon: "speaker.wave.2.fill", color: .orange)
         }
     }
@@ -195,6 +199,15 @@ struct DashboardView: View {
                 Text("Signal: \(call.signalSource) • Suppression: \(suppression.isSuppressing ? "Muting Original (Process Tap)" : "Inactive")")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if let tone = library.ringtones.first(where: { $0.id == player.activeRingtoneID }) {
+                    Text("Playing \(tone.name)")
+                        .font(.caption)
+                        .lineLimit(1)
+                } else if let error = player.lastPlaybackError {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
             }
 
             Spacer()
@@ -225,8 +238,8 @@ struct DashboardView: View {
 
                 statusRow(
                     title: "Ringtone Replacement",
-                    value: settings.suppressOriginalRingtone ? "Core Audio Process Tap" : "Disabled (Play Only)",
-                    color: settings.suppressOriginalRingtone ? .green : .orange
+                    value: "Core Audio Process Tap",
+                    color: .green
                 )
                 statusRow(
                     title: "System Audio Permission",
@@ -272,7 +285,13 @@ struct DashboardView: View {
                 Label("Global Ringtone", systemImage: "music.note")
                     .font(.headline)
 
-                if let tone = globalRingtone {
+                if rotation.mode != .single, !rotation.toneIDs.isEmpty {
+                    Text(rotation.mode.rawValue)
+                        .font(.title3.weight(.semibold))
+                    Text("\(rotation.toneIDs.count) tones · Edit in Ringtone Library")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if let tone = globalRingtone {
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(tone.name)
@@ -307,17 +326,19 @@ struct DashboardView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Divider()
+                if rotation.mode == .single {
+                    Divider()
 
-                Picker("Active Global Tone", selection: Binding(
-                    get: { settings.globalRingtoneID ?? UUID() },
-                    set: { settings.globalRingtoneID = $0 }
-                )) {
-                    ForEach(library.ringtones) { item in
-                        Text(item.name).tag(item.id)
+                    Picker("Active Global Tone", selection: Binding(
+                        get: { settings.globalRingtoneID },
+                        set: { settings.globalRingtoneID = $0 }
+                    )) {
+                        ForEach(library.ringtones) { item in
+                            Text(item.name).tag(Optional(item.id))
+                        }
                     }
+                    .labelsHidden()
                 }
-                .labelsHidden()
             }
             .padding(6)
         }

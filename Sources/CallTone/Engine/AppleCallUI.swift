@@ -12,7 +12,7 @@ enum AppleCallUI {
         let changed = reason != lastDiagnostic
         lastDiagnostic = reason
         diagnosticLock.unlock()
-        if changed { logger.notice("Apple UI detection: \(reason, privacy: .private)") }
+        if changed { logger.notice("Apple UI detection: \(reason, privacy: .public)") }
         return state
     }
 

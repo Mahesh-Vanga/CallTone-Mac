@@ -106,7 +106,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(statusItemRow)
 
         let toneName = library.ringtones.first(where: { $0.id == settings.globalRingtoneID })?.name ?? "None Selected"
-        let toneRow = NSMenuItem(title: "Global Tone: \(toneName)", action: nil, keyEquivalent: "")
+        let rotation = settings.ringtoneRotation.available(in: library.ringtones)
+        let isRotating = rotation.mode != .single && !rotation.toneIDs.isEmpty
+        let toneTitle = isRotating ? "\(rotation.mode.rawValue) (\(rotation.toneIDs.count) tones)" : toneName
+        let toneRow = NSMenuItem(title: "Global Tone: \(toneTitle)", action: nil, keyEquivalent: "")
         toneRow.isEnabled = false
         menu.addItem(toneRow)
 
@@ -132,13 +135,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         toggleMon.target = self
         menu.addItem(toggleMon)
 
-        let switchMenuItem = NSMenuItem(title: "Switch Global Ringtone", action: nil, keyEquivalent: "")
+        let switchMenuItem = NSMenuItem(
+            title: rotation.mode == .single ? "Switch Global Ringtone" : "Use a Single Ringtone",
+            action: nil, keyEquivalent: ""
+        )
         let submenu = NSMenu()
         for tone in library.ringtones {
             let entry = NSMenuItem(title: tone.name, action: #selector(selectRingtone(_:)), keyEquivalent: "")
             entry.target = self
             entry.representedObject = tone.id
-            entry.state = (tone.id == settings.globalRingtoneID) ? .on : .off
+            entry.state = (rotation.mode == .single && tone.id == settings.globalRingtoneID) ? .on : .off
             submenu.addItem(entry)
         }
         switchMenuItem.submenu = submenu
@@ -174,7 +180,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     @objc private func selectRingtone(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? UUID else { return }
-        settings?.globalRingtoneID = id
+        settings?.setSingleRingtone(id)
     }
 
     @objc private func openMainWindow() {

@@ -4,6 +4,7 @@ import CoreAudio
 import UserNotifications
 import OSLog
 import ApplicationServices
+import Combine
 
 struct DetectedCallEvent: Identifiable, Equatable {
     let id = UUID()
@@ -25,6 +26,8 @@ final class CallMonitorEngine: ObservableObject {
     private var activeCallHadIncomingWindow = false
     private var activeCallHadAppleUI = false
     private var activeCallHadAppleWindow = false
+    private var lastAppleCallWindowVisible: Bool?
+    private var appleAudioQuietSince: TimeInterval?
     @Published private(set) var hasCallUIPermission = AXIsProcessTrusted()
 
     private var monitorTask: Task<Void, Never>?
@@ -44,17 +47,35 @@ final class CallMonitorEngine: ObservableObject {
     private weak var libraryManager: RingtoneLibraryManager?
     private weak var suppressionEngine: AudioSuppressionEngine?
     private weak var ringtonePlayer: RingtonePlayer?
+    private var ringtoneChanges: AnyCancellable?
+    private var outputChanges: AnyCancellable?
+    private var rotation = RingtoneRotation()
+    private var rotationQueue: ArraySlice<UUID> = []
+    private var lastRotatedToneID: UUID?
 
     func bind(
         settings: SettingsStore,
         library: RingtoneLibraryManager,
-        suppression: AudioSuppressionEngine,
-        player: RingtonePlayer
+        suppression: AudioSuppressionEngine?,
+        player: RingtonePlayer,
+        devices: AudioDeviceManager? = nil
     ) {
         self.settingsStore = settings
         self.libraryManager = library
         self.suppressionEngine = suppression
         self.ringtonePlayer = player
+        ringtoneChanges = Publishers.MergeMany(
+            settings.$ringtoneRotation.dropFirst().map { _ in () }.eraseToAnyPublisher(),
+            settings.$globalRingtoneID.dropFirst().map { _ in () }.eraseToAnyPublisher(),
+            settings.$selectedOutputDeviceUID.dropFirst().map { _ in () }.eraseToAnyPublisher(),
+            library.$ringtones.dropFirst().map { _ in () }.eraseToAnyPublisher()
+        )
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self] in self?.prepareNextRingtone() }
+        outputChanges = devices?.$outputDevices.removeDuplicates().dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.prepareNextRingtone() }
+        prepareNextRingtone()
     }
 
     func startMonitoring() {
@@ -101,6 +122,7 @@ final class CallMonitorEngine: ObservableObject {
         awaitingTeardownByApp.removeAll()
         teardownQuietSince.removeAll()
         connectedSinceTime.removeAll()
+        lastAppleCallWindowVisible = nil
     }
 
     // MARK: - Simulation
@@ -122,10 +144,6 @@ final class CallMonitorEngine: ObservableObject {
         appStates[app.id] = .ringing
         recordEvent(event)
 
-        if settings.suppressOriginalRingtone {
-            let extras = settings.muteAllCallingAppsOnRing ? settings.callingApps.filter { $0.isEnabled } : []
-            suppressionEngine?.startSuppressing(targetApp: app, additionalApps: extras)
-        }
         playResolvedRingtone(for: app, settings: settings, library: library)
     }
 
@@ -136,6 +154,8 @@ final class CallMonitorEngine: ObservableObject {
     func processSnapshot(audioProcesses: [AudioProcessInfo], windowTitlesByPID: [pid_t: [String]]?, capturedAt: TimeInterval = ProcessInfo.processInfo.systemUptime, appleIncoming: Bool? = nil, appleCallWindowVisible: Bool? = nil) {
         guard capturedAt >= lastSnapshotTime else { return }
         lastSnapshotTime = capturedAt
+        let appleWindowOpened = appleCallWindowVisible == true && lastAppleCallWindowVisible == false
+        if let appleCallWindowVisible { lastAppleCallWindowVisible = appleCallWindowVisible }
         let trusted = AXIsProcessTrusted()
         if trusted != hasCallUIPermission { hasCallUIPermission = trusted }
         let activeOut = audioProcesses
@@ -281,6 +301,7 @@ final class CallMonitorEngine: ObservableObject {
 
             if awaitingTeardownByApp.contains(app.id) {
                 let credibleNewRing = appleIncoming == true && isAppleCall
+                    || (visibleAppleWindow && appleWindowOpened)
                     || (hasIncomingWindow && !visibleAppleWindow)
                 if credibleNewRing {
                     awaitingTeardownByApp.remove(app.id)
@@ -300,6 +321,14 @@ final class CallMonitorEngine: ObservableObject {
             }
 
             if ringingDetected {
+                appleAudioQuietSince = nil
+                if let suppressionEngine {
+                    suppressionEngine.suppressRinging(
+                        targetApp: app,
+                        additionalApps: settings.muteAllCallingAppsOnRing ? enabledApps : [],
+                        processes: audioProcesses
+                    )
+                }
                 if previousState != .ringing {
                     appStates[app.id] = .ringing
                     handleNewIncomingCall(app: app, signalSource: signalSource, settings: settings, library: library)
@@ -310,9 +339,16 @@ final class CallMonitorEngine: ObservableObject {
                     return
                 }
             } else if previousState == .ringing {
+                if isAppleCall, appleIncoming == nil, activeCall?.app.id == app.id {
+                    let quietStart = appleAudioQuietSince ?? capturedAt
+                    appleAudioQuietSince = quietStart
+                    // shortcut: bridge brief gaps when the audio stream is the only available call signal.
+                    if capturedAt - quietStart < 0.9 { return }
+                }
                 appStates[app.id] = .idle
                 if activeCall?.app.id == app.id {
-                    endActiveCall(reason: "Call ended or missed", waitForTeardown: isAppleCall || isOutputting)
+                    let audioAlreadyQuiet = appleAudioQuietSince != nil
+                    endActiveCall(reason: "Call ended or missed", waitForTeardown: !audioAlreadyQuiet && (isAppleCall || isOutputting))
                     return
                 }
             } else if previousState != .idle {
@@ -342,10 +378,6 @@ final class CallMonitorEngine: ObservableObject {
         logger.notice("Ring start app=\(app.id, privacy: .private) source=\(signalSource, privacy: .public)")
         recordEvent(event)
 
-        if settings.suppressOriginalRingtone {
-            let extras = settings.muteAllCallingAppsOnRing ? settings.callingApps.filter { $0.isEnabled } : []
-            suppressionEngine?.startSuppressing(targetApp: app, additionalApps: extras)
-        }
         playResolvedRingtone(for: app, settings: settings, library: library)
         sendOptionalNotification(for: app, settings: settings)
     }
@@ -355,7 +387,10 @@ final class CallMonitorEngine: ObservableObject {
         settings: SettingsStore,
         library: RingtoneLibraryManager
     ) {
-        guard let item = Self.resolvedRingtone(for: app, globalID: settings.globalRingtoneID, ringtones: library.ringtones) else {
+        let nextID = nextRotationID(settings: settings, library: library)
+        guard let item = Self.resolvedRingtone(
+            for: app, globalID: nextID ?? settings.globalRingtoneID, ringtones: library.ringtones
+        ) else {
             return
         }
         let fileURL = library.fileURL(for: item)
@@ -366,6 +401,36 @@ final class CallMonitorEngine: ObservableObject {
             fadeInOverride: 0,
             fadeOutOverride: settings.useGlobalAudioOverrides ? settings.globalFadeOut : nil,
             loopOverride: true,
+            outputDeviceID: settings.selectedOutputDeviceID,
+            forIncomingCall: true
+        )
+        if let error = ringtonePlayer?.lastPlaybackError {
+            logger.error("Custom ringtone could not start: \(error, privacy: .private)")
+        }
+        if item.id == nextID, item.id != app.customRingtoneID {
+            lastRotatedToneID = rotationQueue.popFirst()
+        }
+        prepareNextRingtone()
+    }
+
+    private func nextRotationID(settings: SettingsStore, library: RingtoneLibraryManager) -> UUID? {
+        let current = settings.ringtoneRotation.available(in: library.ringtones)
+        if current != rotation {
+            rotation = current
+            rotationQueue = []
+        }
+        if rotationQueue.isEmpty {
+            rotationQueue = rotation.cycle(after: lastRotatedToneID)[...]
+        }
+        return rotationQueue.first
+    }
+
+    private func prepareNextRingtone() {
+        guard let settings = settingsStore, let library = libraryManager else { return }
+        let id = nextRotationID(settings: settings, library: library) ?? settings.globalRingtoneID
+        let item = library.ringtones.first { $0.id == id }
+        ringtonePlayer?.prepareNextCall(
+            item: item, fileURL: item.map { library.fileURL(for: $0) },
             outputDeviceID: settings.selectedOutputDeviceID
         )
     }
@@ -401,6 +466,7 @@ final class CallMonitorEngine: ObservableObject {
         activeCallHadIncomingWindow = false
         activeCallHadAppleUI = false
         activeCallHadAppleWindow = false
+        appleAudioQuietSince = nil
     }
 
     func clearRecentEvents() {

@@ -82,9 +82,8 @@ struct AudioSettingsView: View {
             }
 
             Section("Original Ringtone Suppression (Core Audio Process Tap)") {
-                Toggle("Mute Original App Ringtone During Incoming Calls", isOn: $settings.suppressOriginalRingtone)
+                Text("CallTone automatically mutes the original ringtone for monitored calls.")
                 Toggle("Mute All Enabled Calling Apps During Ring", isOn: $settings.muteAllCallingAppsOnRing)
-                    .disabled(!settings.suppressOriginalRingtone)
 
                 HStack {
                     VStack(alignment: .leading, spacing: 3) {

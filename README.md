@@ -2,11 +2,11 @@
 
 <img src="Resources/Logo.png" alt="CallTone Mac logo" width="112">
 
-Set custom ringtones for incoming calls on your Mac. Choose one global tone or assign a different tone to FaceTime, WhatsApp, and other calling apps. CallTone Mac is a native Swift and SwiftUI app that processes call signals and audio on your Mac.
+Set custom ringtones for incoming calls on your Mac. Use a single global tone, rotate through a selection, or assign a different tone to FaceTime, WhatsApp, and other calling apps. CallTone Mac is a native Swift and SwiftUI app that processes call signals and audio on your Mac.
 
 **Apple Silicon · macOS 14.2 or later · MIT license**
 
-[Download CallTone Mac 1.0.0 (DMG)](https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.0/CallTone-Mac-1.0.0.dmg) · [All releases](https://github.com/Mahesh-Vanga/CallTone-Mac/releases) · [Report an issue](https://github.com/Mahesh-Vanga/CallTone-Mac/issues)
+[Download CallTone Mac 1.0.1 (DMG)](https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.1/CallTone-Mac-1.0.1.dmg) · [All releases](https://github.com/Mahesh-Vanga/CallTone-Mac/releases) · [Report an issue](https://github.com/Mahesh-Vanga/CallTone-Mac/issues)
 
 [Install](#install) · [First launch and permissions](#first-launch-and-permissions) · [App walkthrough](#app-walkthrough) · [Troubleshooting](#troubleshooting) · [Build from source](#build-from-source)
 
@@ -16,9 +16,9 @@ Choose one of the three Apple-notarized downloads for Apple Silicon Macs.
 
 | Download | How to install |
 | --- | --- |
-| [DMG](https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.0/CallTone-Mac-1.0.0.dmg) | Open the disk image and drag **CallTone Mac** to **Applications**. |
-| [PKG](https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.0/CallTone-Mac-1.0.0.pkg) | Open the package and follow the macOS Installer prompts. |
-| [ZIP](https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.0/CallTone-Mac-1.0.0.zip) | Double-click the ZIP and move **CallTone Mac.app** to **Applications**. |
+| [DMG](https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.1/CallTone-Mac-1.0.1.dmg) | Open the disk image and drag **CallTone Mac** to **Applications**. |
+| [PKG](https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.1/CallTone-Mac-1.0.1.pkg) | Open the package and follow the macOS Installer prompts. |
+| [ZIP](https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.1/CallTone-Mac-1.0.1.zip) | Double-click the ZIP and move **CallTone Mac.app** to **Applications**. |
 
 Open CallTone Mac from **Applications** and follow the welcome screen. macOS may ask you to confirm the first launch. GitHub also lists source archives for developers.
 
@@ -32,8 +32,8 @@ download_dir="$(mktemp -d)"
   set -e
   cd "$download_dir"
   curl --fail --location --remote-name \
-    https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.0/CallTone-Mac-1.0.0.zip
-  ditto -x -k CallTone-Mac-1.0.0.zip .
+    https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.1/CallTone-Mac-1.0.1.zip
+  ditto -x -k CallTone-Mac-1.0.1.zip .
   codesign --verify --deep --strict "CallTone Mac.app"
   xcrun stapler validate "CallTone Mac.app"
   spctl --assess --type execute --verbose=2 "CallTone Mac.app"
@@ -67,6 +67,8 @@ Start or pause monitoring, see the active call and recent detection activity, ch
 ### Ringtone Library
 
 Select **Import Audio** or drag files into the library. Supported imports include MP3, WAV, M4A, M4R, CAF, AAC, AIFF, and FLAC. Play a tone to preview it, then select **Set Global** or use **Assign to Calling App** in its menu. **Built-in Tones** restores the five included tones. The row menu also offers duplicate, rename, M4A clip export, and **Reveal in Finder**.
+
+Set **Incoming Call Ringtone** to **Sequential** or **Shuffle**, then check the tones to include. Sequential starts in selection order. Use **Move Earlier in Sequence** and **Move Later in Sequence** in a tone’s menu to change its position. Shuffle plays each selected tone once per cycle and avoids immediate repeats when multiple tones are selected. Each call uses one tone. Per-app assignments take priority, and an empty rotation uses the single global tone. **Simulate Call** advances the rotation too.
 
 ![Ringtone Library with five built-in tones](docs/demo/library.png)
 
@@ -119,14 +121,14 @@ Use the menu bar icon to reopen the window, pause or resume monitoring, switch t
 | --- | --- |
 | macOS flags the download | Confirm you downloaded an installer from the release assets. Use the ZIP verification commands above or the DMG and PKG checks below. A normal first-open confirmation can still appear. |
 | The custom ringtone is silent | Preview it in **Ringtone Library**, then run **Test Audio Output**. Check master volume, output routing, the calling app's assigned tone, and whether monitoring is active. |
-| Both ringtones play | In **Audio Settings**, enable **Mute Original App Ringtone During Incoming Calls** and run **Verify Tap Permission**. Check System Audio Recording access in macOS settings. |
+| Both ringtones play | In **Audio Settings**, run **Verify Tap Permission** and check System Audio Recording access in macOS settings. CallTone automatically attempts to mute the original ringtone for monitored calls. |
 | An Apple call rings late or is missed | Check Accessibility access, confirm the Apple Phone or FaceTime profile is enabled, and review the Dashboard's recent activity. |
 | A third-party call is missed | Enable the corresponding app profile, verify its tone with **Test**, and check the audio fallback setting. A successful test confirms playback. Use a real call to check detection. |
 | Permissions changed after an upgrade | Confirm you opened the copy in Applications and review its permissions in **General Settings → macOS Permissions**. |
 
 ## How it works
 
-CallTone Mac uses Apple Accessibility controls and calling-app window and audio signals to detect ringing. It resolves the per-app tone or global default, then plays that tone through the selected audio output. When suppression is enabled and permitted, it uses Core Audio Process Taps to mute the original ringtone during ringing and releases the taps when the call is answered or ends. It uses macOS frameworks without a kernel extension or a virtual audio driver.
+CallTone Mac uses Apple Accessibility controls and calling-app window and audio signals to detect ringing. It resolves the per-app tone or the next global tone, then plays it through the selected audio output. The next global tone is prepared in the background to reduce playback startup time. With System Audio Recording permission, CallTone Mac uses Core Audio Process Taps to mute the original ringtone during ringing and releases the taps when the call is answered or ends. It uses macOS frameworks without a kernel extension or a virtual audio driver.
 
 Call processing, settings, and ringtone storage stay on the Mac. CallTone Mac has no account, ads, or analytics. Manual and optional automatic update checks fetch public GitHub release metadata over HTTPS. [Privacy policy](PRIVACY.md)
 
@@ -167,10 +169,10 @@ Check submission status and verify both distributable files. Replace the version
 
 ```bash
 xcrun notarytool history --keychain-profile CallToneNotary
-xcrun stapler validate dist/CallTone-Mac-1.0.0.dmg
-xcrun stapler validate dist/CallTone-Mac-1.0.0.pkg
-spctl --assess --type open --context context:primary-signature --verbose=2 dist/CallTone-Mac-1.0.0.dmg
-spctl --assess --type install --verbose=2 dist/CallTone-Mac-1.0.0.pkg
+xcrun stapler validate dist/CallTone-Mac-1.0.1.dmg
+xcrun stapler validate dist/CallTone-Mac-1.0.1.pkg
+spctl --assess --type open --context context:primary-signature --verbose=2 dist/CallTone-Mac-1.0.1.dmg
+spctl --assess --type install --verbose=2 dist/CallTone-Mac-1.0.1.pkg
 ```
 
 When publishing a new version, update the version fields in [Info.plist](Resources/Info.plist) and publish a matching stable GitHub tag, such as `v1.0.1`, with the verified download. The app reads its update repository from `CallToneUpdateRepository` in that plist.

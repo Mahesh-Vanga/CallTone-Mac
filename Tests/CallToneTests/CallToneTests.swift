@@ -129,13 +129,11 @@ final class CallToneTests: XCTestCase {
         let settings = SettingsStore(directory: directory)
         settings.callingApps = Array(CallingApp.defaultCatalog.prefix(2))
         settings.globalRingtoneID = nil
-        settings.suppressOriginalRingtone = false
         let library = RingtoneLibraryManager(directory: directory)
-        let suppression = AudioSuppressionEngine()
         let player = RingtonePlayer()
         let monitor = CallMonitorEngine()
-        monitor.bind(settings: settings, library: library, suppression: suppression, player: player)
-        try withExtendedLifetime((library, suppression, player)) { try body(monitor, settings) }
+        monitor.bind(settings: settings, library: library, suppression: nil, player: player)
+        try withExtendedLifetime((library, player)) { try body(monitor, settings) }
     }
 
     private func appleAudio(output: Bool = true, input: Bool = false) -> AudioProcessInfo {
@@ -197,12 +195,18 @@ final class CallToneTests: XCTestCase {
     }
 
     @MainActor
-    func testAudioOnlyCallStopsWhenStreamEndsAndPlainFaceTimeTitleIsNotIncoming() throws {
+    func testAudioOnlyAppleCallBridgesShortGapsAndRearmsAfterSustainedSilence() throws {
         try withMonitor { monitor, _ in
             monitor.processSnapshot(audioProcesses: [appleAudio()], windowTitlesByPID: [:], capturedAt: 1)
-            XCTAssertNotNil(monitor.activeCall)
+            let firstCall = try XCTUnwrap(monitor.activeCall)
             monitor.processSnapshot(audioProcesses: [], windowTitlesByPID: [:], capturedAt: 2)
+            monitor.processSnapshot(audioProcesses: [appleAudio()], windowTitlesByPID: [:], capturedAt: 2.35)
+            XCTAssertEqual(monitor.activeCall?.id, firstCall.id)
+            monitor.processSnapshot(audioProcesses: [], windowTitlesByPID: [:], capturedAt: 3)
+            monitor.processSnapshot(audioProcesses: [], windowTitlesByPID: [:], capturedAt: 3.95)
             XCTAssertNil(monitor.activeCall)
+            monitor.processSnapshot(audioProcesses: [appleAudio()], windowTitlesByPID: [:], capturedAt: 4)
+            XCTAssertNotEqual(try XCTUnwrap(monitor.activeCall).id, firstCall.id)
         }
         let faceTime = CallingApp.defaultCatalog.first { $0.id == "com.apple.FaceTime" }!
         XCTAssertFalse(CallMonitorEngine.checkIncomingWindow(pids: [123456], keywords: faceTime.incomingWindowKeywords,
@@ -297,7 +301,28 @@ final class CallToneTests: XCTestCase {
             monitor.processSnapshot(audioProcesses: [appleAudio()], windowTitlesByPID: [:], capturedAt: 5,
                                     appleCallWindowVisible: false)
             XCTAssertNil(monitor.activeCall)
+            // A fresh call window can open before the shared daemon stops producing audio.
+            monitor.processSnapshot(audioProcesses: [appleAudio()], windowTitlesByPID: [:], capturedAt: 5.1,
+                                    appleCallWindowVisible: true)
+            XCTAssertEqual(monitor.activeCall?.signalSource, "Apple Call Window + Audio")
+            XCTAssertNotEqual(monitor.activeCall?.id, eventID)
         }
+    }
+
+    func testSuppressionTargetsNewAppleAudioProcessesWhileTheyAreStillQuiet() {
+        let phone = CallingApp.defaultCatalog[0]
+        let whatsapp = CallingApp.defaultCatalog.first { $0.name == "WhatsApp" }!
+        let telephony = appleAudio(output: false)
+        let systemSound = AudioProcessInfo(id: 42, pid: 42, bundleID: "", processName: "systemsoundserverd",
+                                           isRunningOutput: false, isRunningInput: false)
+        let media = AudioProcessInfo(id: 43, pid: 43, bundleID: "com.apple.Music", processName: "Music",
+                                      isRunningOutput: true, isRunningInput: false)
+        XCTAssertEqual(AudioSuppressionEngine.ringtoneProcesses(
+            targetApp: phone, additionalApps: [], processes: [telephony, systemSound, media]
+        ), [telephony, systemSound])
+        XCTAssertEqual(AudioSuppressionEngine.ringtoneProcesses(
+            targetApp: whatsapp, additionalApps: [phone], processes: [telephony, systemSound, media]
+        ), [telephony])
     }
 
     func testAppleCallWindowDoesNotRequireAReadableTitleAndIgnoresInvisibleSurfaces() {
@@ -334,6 +359,86 @@ final class CallToneTests: XCTestCase {
         let global = RingtoneItem(name: "Global", fileName: "global.wav", fileExtension: "WAV", duration: 1)
         XCTAssertEqual(CallMonitorEngine.resolvedRingtone(for: app, globalID: global.id, ringtones: [global]), global)
         XCTAssertNil(CallMonitorEngine.resolvedRingtone(for: app, globalID: nil, ringtones: [global]))
+    }
+
+    @MainActor
+    func testRingtoneSelectionAcrossDetectedCallsInAllModes() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let settings = SettingsStore(directory: directory)
+        let library = RingtoneLibraryManager(directory: directory)
+        let player = RingtonePlayer()
+        let monitor = CallMonitorEngine()
+        let selected = Array(library.ringtones.prefix(3))
+        XCTAssertEqual(selected.count, 3)
+        var trimmed = selected[1]
+        trimmed.trimEnd = 0.5
+        library.updateItem(trimmed)
+
+        settings.globalRingtoneID = selected[2].id
+        settings.masterVolume = 0
+        settings.ringtoneRotation = RingtoneRotation(mode: .sequential, toneIDs: [selected[1].id, selected[0].id])
+        settings.ringtoneRotation.move(selected[0].id, by: -1)
+        XCTAssertEqual(SettingsStore(directory: directory).ringtoneRotation, settings.ringtoneRotation)
+
+        monitor.bind(settings: settings, library: library, suppression: nil, player: player)
+        defer { monitor.stopSimulatedOrActiveCall() }
+        let app = CallingApp.defaultCatalog[0]
+        var overridingApp = app
+        overridingApp.customRingtoneID = selected[0].id
+        var capturedAt: TimeInterval = 0
+
+        func ring(_ app: CallingApp) -> UUID? {
+            settings.callingApps = [app]
+            capturedAt += 1
+            monitor.processSnapshot(audioProcesses: [], windowTitlesByPID: [:], capturedAt: capturedAt, appleIncoming: true)
+            let id = player.activeRingtoneID
+            XCTAssertTrue(player.isPlaying, player.lastPlaybackError ?? "Playback did not start")
+            capturedAt += 1
+            monitor.processSnapshot(audioProcesses: [], windowTitlesByPID: [:], capturedAt: capturedAt, appleIncoming: false)
+            XCTAssertFalse(player.isPlaying)
+            return id
+        }
+
+        XCTAssertEqual(ring(overridingApp), selected[0].id)
+        XCTAssertEqual(ring(app), selected[0].id)
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(ring(app), trimmed.id)
+        XCTAssertEqual(ring(app), selected[0].id)
+
+        let ids = selected.map(\.id)
+        settings.ringtoneRotation = RingtoneRotation(mode: .shuffle, toneIDs: ids)
+        let firstCycle = ids.compactMap { _ in ring(app) }
+        let secondCycle = ids.compactMap { _ in ring(app) }
+        XCTAssertEqual(Set(firstCycle), Set(ids))
+        XCTAssertEqual(Set(secondCycle), Set(ids))
+        XCTAssertNotEqual(firstCycle.last, secondCycle.first)
+
+        settings.ringtoneRotation.mode = .single
+        XCTAssertEqual(ring(app), selected[2].id)
+        XCTAssertEqual(ring(app), selected[2].id)
+        settings.ringtoneRotation.mode = .shuffle
+        settings.ringtoneRotation.toneIDs = [trimmed.id]
+        library.deleteItem(trimmed)
+        XCTAssertEqual(ring(app), selected[2].id)
+    }
+
+    @MainActor
+    func testLegacySettingsKeepSingleRingtoneByDefault() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let settings = SettingsStore(directory: directory)
+        let originalID = UUID()
+        settings.globalRingtoneID = originalID
+        let url = directory.appendingPathComponent("settings.json")
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        legacy.removeValue(forKey: "ringtoneRotation")
+        try JSONSerialization.data(withJSONObject: legacy).write(to: url)
+
+        let restored = SettingsStore(directory: directory)
+        XCTAssertNil(restored.lastError)
+        XCTAssertEqual(restored.globalRingtoneID, originalID)
+        XCTAssertEqual(restored.ringtoneRotation.mode, .single)
     }
 
     @MainActor
@@ -468,12 +573,10 @@ final class CallToneTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let settings = SettingsStore(directory: directory)
-        settings.suppressOriginalRingtone = false
         let library = RingtoneLibraryManager(directory: directory)
-        let suppression = AudioSuppressionEngine()
         let player = RingtonePlayer()
         let monitor = CallMonitorEngine()
-        monitor.bind(settings: settings, library: library, suppression: suppression, player: player)
+        monitor.bind(settings: settings, library: library, suppression: nil, player: player)
 
         let whatsAppProc = AudioProcessInfo(id: 9999, pid: 9999, bundleID: "net.whatsapp.WhatsApp", processName: "WhatsApp", isRunningOutput: true, isRunningInput: false)
 

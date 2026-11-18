@@ -30,6 +30,9 @@ final class AudioSuppressionEngine: ObservableObject {
     private var activeTapID: AudioObjectID = kAudioObjectUnknown
     private var activeAggregateDeviceID: AudioObjectID = kAudioObjectUnknown
     private var activeIOProcID: AudioDeviceIOProcID?
+    private var activeProcessIDs: Set<AudioObjectID> = []
+    private var activeTapUUID: UUID?
+    private var retryAfter: TimeInterval = 0
     private let ioQueue = DispatchQueue(label: "com.calltone.audio.tap", qos: .userInteractive)
     deinit {
         // Ensure cleanup even on deinit
@@ -169,21 +172,53 @@ final class AudioSuppressionEngine: ObservableObject {
 
     // MARK: - Suppression Control
 
-    /// Starts a Core Audio Process Tap that mutes the target app (and optionally all enabled calling apps)
-    /// while the incoming call is ringing so zero default ringtone sound is heard.
-    func startSuppressing(targetApp: CallingApp, additionalApps: [CallingApp] = []) {
-        stopSuppressing()
-
+    func suppressRinging(targetApp: CallingApp, additionalApps: [CallingApp], processes: [AudioProcessInfo]) {
         guard #available(macOS 14.2, *) else {
             permissionStatus = .unsupportedOS
             lastErrorMessage = "Core Audio Process Tap suppression requires macOS 14.2 or later."
             return
         }
 
+        let matchingObjects = Self.ringtoneProcesses(targetApp: targetApp, additionalApps: additionalApps, processes: processes)
+        guard !matchingObjects.isEmpty else { return }
+        let objectIDs = Set(matchingObjects.map(\.id))
+        guard objectIDs != activeProcessIDs, ProcessInfo.processInfo.systemUptime >= retryAfter else { return }
+        // A failed start or update can be retried on the next call snapshot after this interval.
+        retryAfter = ProcessInfo.processInfo.systemUptime + 0.25
+
+        let tapDescription = CATapDescription(stereoMixdownOfProcesses: Array(objectIDs))
+        tapDescription.muteBehavior = .muted
+        tapDescription.isPrivate = true
+        tapDescription.name = "CallTone Mac-Suppress-\(targetApp.name)"
+
+        if let activeTapUUID {
+            tapDescription.uuid = activeTapUUID
+            var address = AudioObjectPropertyAddress(mSelector: kAudioTapPropertyDescription,
+                mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+            var description = Unmanaged.passUnretained(tapDescription)
+            let status = AudioObjectSetPropertyData(activeTapID, &address, 0, nil,
+                UInt32(MemoryLayout.size(ofValue: description)), &description)
+            guard status == noErr else {
+                lastErrorMessage = "Could not update ringtone muting (OSStatus \(status))."
+                return
+            }
+        } else if !startTap(tapDescription, name: targetApp.name) {
+            return
+        }
+
+        activeProcessIDs = objectIDs
+        isSuppressing = true
+        suppressedBundleIDs = matchingObjects.map { $0.bundleID.isEmpty ? $0.processName : $0.bundleID }
+        retryAfter = 0
+        lastErrorMessage = nil
+    }
+
+    nonisolated static func ringtoneProcesses(
+        targetApp: CallingApp, additionalApps: [CallingApp], processes: [AudioProcessInfo]
+    ) -> [AudioProcessInfo] {
         let appsToMute = [targetApp] + additionalApps
-        let isAppleCall = appsToMute.contains { $0.isContinuityPhone || $0.id == "com.apple.FaceTime" }
-        let processes = Self.fetchActiveAudioProcesses()
-        let matchingObjects = processes.filter { proc in
+        let isAppleCall = targetApp.isContinuityPhone || targetApp.id == "com.apple.FaceTime"
+        return processes.filter { proc in
             let matchesApp = appsToMute.contains { app in
                 let matchesBundle = app.bundleIdentifiers.contains { bid in
                     proc.bundleID.caseInsensitiveCompare(bid) == .orderedSame
@@ -200,44 +235,24 @@ final class AudioSuppressionEngine: ObservableObject {
             )
             return matchesApp || matchesSystemTelephony
         }
+    }
 
-        guard !matchingObjects.isEmpty else {
-            lastErrorMessage = "No active audio process found for \(targetApp.name) to tap."
-            return
-        }
-
-        let objectIDs = matchingObjects.map { $0.id }
-        let tapDescription = CATapDescription(stereoMixdownOfProcesses: objectIDs)
-        tapDescription.muteBehavior = .muted
-        tapDescription.isPrivate = true
-        tapDescription.name = "CallTone Mac-Suppress-\(targetApp.name)"
-
+    @available(macOS 14.2, *)
+    private func startTap(_ tapDescription: CATapDescription, name: String) -> Bool {
         var tapID = AudioObjectID(kAudioObjectUnknown)
         let tapStatus = AudioHardwareCreateProcessTap(tapDescription, &tapID)
         guard tapStatus == noErr, tapID != kAudioObjectUnknown else {
             lastErrorMessage = "AudioHardwareCreateProcessTap failed (OSStatus \(tapStatus))."
-            return
-        }
-
-        let outputDeviceID = AudioDeviceManager.getDefaultOutputDeviceID()
-        guard let outputUID = AudioDeviceManager.getDeviceUID(for: outputDeviceID) else {
-            AudioHardwareDestroyProcessTap(tapID)
-            lastErrorMessage = "Could not resolve default output device UID."
-            return
+            return false
         }
 
         let tapUUIDString = tapDescription.uuid.uuidString
         let aggregateUID = "com.calltone.aggregate.\(UUID().uuidString)"
         let aggregateDict: [String: Any] = [
-            kAudioAggregateDeviceNameKey: "CallTone Mac-Tap-\(targetApp.name)",
+            kAudioAggregateDeviceNameKey: "CallTone Mac-Tap-\(name)",
             kAudioAggregateDeviceUIDKey: aggregateUID,
-            kAudioAggregateDeviceMainSubDeviceKey: outputUID,
             kAudioAggregateDeviceIsPrivateKey: true,
-            kAudioAggregateDeviceIsStackedKey: false,
             kAudioAggregateDeviceTapAutoStartKey: true,
-            kAudioAggregateDeviceSubDeviceListKey: [
-                [kAudioSubDeviceUIDKey: outputUID]
-            ],
             kAudioAggregateDeviceTapListKey: [
                 [
                     kAudioSubTapDriftCompensationKey: true,
@@ -251,7 +266,7 @@ final class AudioSuppressionEngine: ObservableObject {
         guard aggStatus == noErr, aggregateID != kAudioObjectUnknown else {
             AudioHardwareDestroyProcessTap(tapID)
             lastErrorMessage = "AudioHardwareCreateAggregateDevice failed (OSStatus \(aggStatus))."
-            return
+            return false
         }
 
         var ioProcID: AudioDeviceIOProcID?
@@ -261,7 +276,7 @@ final class AudioSuppressionEngine: ObservableObject {
             AudioHardwareDestroyAggregateDevice(aggregateID)
             AudioHardwareDestroyProcessTap(tapID)
             lastErrorMessage = "AudioDeviceCreateIOProcIDWithBlock failed (OSStatus \(ioStatus))."
-            return
+            return false
         }
 
         let startStatus = AudioDeviceStart(aggregateID, createdIOProc)
@@ -270,15 +285,14 @@ final class AudioSuppressionEngine: ObservableObject {
             AudioHardwareDestroyAggregateDevice(aggregateID)
             AudioHardwareDestroyProcessTap(tapID)
             lastErrorMessage = "AudioDeviceStart failed (OSStatus \(startStatus))."
-            return
+            return false
         }
 
         self.activeTapID = tapID
         self.activeAggregateDeviceID = aggregateID
         self.activeIOProcID = createdIOProc
-        self.isSuppressing = true
-        self.suppressedBundleIDs = matchingObjects.map { $0.bundleID.isEmpty ? $0.processName : $0.bundleID }
-        self.lastErrorMessage = nil
+        self.activeTapUUID = tapDescription.uuid
+        return true
     }
 
     /// Immediately stops suppressing and restores untouched audio routing for the calling app.
@@ -300,6 +314,9 @@ final class AudioSuppressionEngine: ObservableObject {
             activeTapID = kAudioObjectUnknown
         }
 
+        activeTapUUID = nil
+        activeProcessIDs.removeAll()
+        retryAfter = 0
         isSuppressing = false
         suppressedBundleIDs = []
     }
@@ -341,19 +358,11 @@ final class AudioSuppressionEngine: ObservableObject {
             return
         }
 
-        let outputID = AudioDeviceManager.getDefaultOutputDeviceID()
-        guard let outputUID = AudioDeviceManager.getDeviceUID(for: outputID) else {
-            AudioHardwareDestroyProcessTap(tapID)
-            return
-        }
-
         let aggregateDict: [String: Any] = [
             kAudioAggregateDeviceNameKey: "CallTone Mac-Probe",
             kAudioAggregateDeviceUIDKey: "com.calltone.probe.\(UUID().uuidString)",
-            kAudioAggregateDeviceMainSubDeviceKey: outputUID,
             kAudioAggregateDeviceIsPrivateKey: true,
             kAudioAggregateDeviceTapAutoStartKey: true,
-            kAudioAggregateDeviceSubDeviceListKey: [[kAudioSubDeviceUIDKey: outputUID]],
             kAudioAggregateDeviceTapListKey: [[
                 kAudioSubTapDriftCompensationKey: true,
                 kAudioSubTapUIDKey: tapDescription.uuid.uuidString

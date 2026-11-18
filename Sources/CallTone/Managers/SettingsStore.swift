@@ -22,6 +22,7 @@ enum AppearanceMode: String, Codable, CaseIterable, Identifiable {
 @MainActor
 final class SettingsStore: ObservableObject {
     @Published var globalRingtoneID: UUID? { didSet { save() } }
+    @Published var ringtoneRotation = RingtoneRotation() { didSet { save() } }
     @Published var callingApps: [CallingApp] = CallingApp.defaultCatalog { didSet { save() } }
 
     // Audio Settings
@@ -30,7 +31,6 @@ final class SettingsStore: ObservableObject {
     @Published var globalFadeOut: TimeInterval = 0.25 { didSet { save() } }
     @Published var globalLoopEnabled: Bool = true { didSet { save() } }
     @Published var useGlobalAudioOverrides: Bool = true { didSet { save() } }
-    @Published var suppressOriginalRingtone: Bool = true { didSet { save() } }
     @Published var muteAllCallingAppsOnRing: Bool = true { didSet { save() } }
     @Published var allowAudioFallbackForThirdParty: Bool = true { didSet { save() } }
     @Published var selectedOutputDeviceUID: String? { didSet { save() } }
@@ -66,13 +66,14 @@ final class SettingsStore: ObservableObject {
 
     private struct PersistedSettings: Codable {
         var globalRingtoneID: UUID?
+        var ringtoneRotation: RingtoneRotation?
         var callingApps: [CallingApp]
         var masterVolume: Float
         var globalFadeIn: TimeInterval
         var globalFadeOut: TimeInterval
         var globalLoopEnabled: Bool
         var useGlobalAudioOverrides: Bool
-        var suppressOriginalRingtone: Bool
+        var suppressOriginalRingtone: Bool?
         var muteAllCallingAppsOnRing: Bool?
         var allowAudioFallbackForThirdParty: Bool?
         var selectedOutputDeviceUID: String?
@@ -213,6 +214,17 @@ final class SettingsStore: ObservableObject {
         if globalRingtoneID == nil || !library.ringtones.contains(where: { $0.id == globalRingtoneID }) {
             globalRingtoneID = library.ringtones.first?.id
         }
+        let available = ringtoneRotation.available(in: library.ringtones)
+        if available != ringtoneRotation {
+            ringtoneRotation = available
+        }
+    }
+
+    func setSingleRingtone(_ id: UUID) {
+        globalRingtoneID = id
+        if ringtoneRotation.mode != .single {
+            ringtoneRotation.mode = .single
+        }
     }
 
     private func updateLaunchAtLogin(enabled: Bool) {
@@ -246,6 +258,7 @@ final class SettingsStore: ObservableObject {
         }
 
         self.globalRingtoneID = decoded.globalRingtoneID
+        self.ringtoneRotation = decoded.ringtoneRotation ?? RingtoneRotation()
         // Merge default catalog with saved user preferences (isEnabled, customRingtoneID)
         // Always keep the latest bundleIdentifiers, audioProcessNames, and keywords from defaultCatalog
         var merged = CallingApp.defaultCatalog.map { defaultApp -> CallingApp in
@@ -265,7 +278,6 @@ final class SettingsStore: ObservableObject {
         self.globalFadeOut = decoded.globalFadeOut
         self.globalLoopEnabled = decoded.globalLoopEnabled
         self.useGlobalAudioOverrides = decoded.useGlobalAudioOverrides
-        self.suppressOriginalRingtone = decoded.suppressOriginalRingtone
         self.muteAllCallingAppsOnRing = decoded.muteAllCallingAppsOnRing ?? true
         self.allowAudioFallbackForThirdParty = decoded.allowAudioFallbackForThirdParty ?? true
         self.selectedOutputDeviceUID = decoded.selectedOutputDeviceUID
@@ -280,13 +292,14 @@ final class SettingsStore: ObservableObject {
         guard !isLoading, canSave else { return }
         let payload = PersistedSettings(
             globalRingtoneID: globalRingtoneID,
+            ringtoneRotation: ringtoneRotation,
             callingApps: callingApps,
             masterVolume: masterVolume,
             globalFadeIn: globalFadeIn,
             globalFadeOut: globalFadeOut,
             globalLoopEnabled: globalLoopEnabled,
             useGlobalAudioOverrides: useGlobalAudioOverrides,
-            suppressOriginalRingtone: suppressOriginalRingtone,
+            suppressOriginalRingtone: true,
             muteAllCallingAppsOnRing: muteAllCallingAppsOnRing,
             allowAudioFallbackForThirdParty: allowAudioFallbackForThirdParty,
             selectedOutputDeviceUID: selectedOutputDeviceUID,

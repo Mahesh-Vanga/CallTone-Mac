@@ -19,6 +19,61 @@ final class RingtonePlayer: ObservableObject {
     private var progressTimer: Timer?
     private var playbackStartDate: Date?
 
+    private struct Preparation: Equatable {
+        let item: RingtoneItem
+        let url: URL
+        let deviceID: AudioDeviceID?
+        let defaultDeviceID: AudioDeviceID?
+
+        @MainActor
+        init(item: RingtoneItem, url: URL, deviceID: AudioDeviceID?) {
+            self.item = item
+            self.url = url
+            self.deviceID = deviceID
+            self.defaultDeviceID = deviceID == nil ? AudioDeviceManager.getDefaultOutputDeviceID() : nil
+        }
+    }
+
+    private enum PreparedAudio {
+        case player(AVAudioPlayer)
+        case engine(AVAudioEngine, AVAudioPlayerNode, AVAudioFile, AVAudioFramePosition, AVAudioFrameCount, AVAudioPCMBuffer?)
+    }
+
+    private var requestedPreparation: Preparation?
+    private var preparedAudio: PreparedAudio?
+    private var preparationTask: Task<Void, Never>?
+
+    deinit {
+        preparationTask?.cancel()
+    }
+
+    func prepareNextCall(item: RingtoneItem?, fileURL: URL?, outputDeviceID: AudioDeviceID?) {
+        let request = item.flatMap { item in
+            fileURL.map { Preparation(item: item, url: $0, deviceID: outputDeviceID) }
+        }
+        guard request != requestedPreparation else { return }
+        preparationTask?.cancel()
+        requestedPreparation = request
+        preparedAudio = nil
+        guard let request else { return }
+        preparationTask = Task { [weak self] in
+            let worker = Task.detached(priority: .userInitiated) {
+                try? Self.prepareAudio(request, loop: true)
+            }
+            let audio = await withTaskCancellationHandler {
+                await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
+            guard !Task.isCancelled else { return }
+            self?.preparedAudio = audio
+        }
+    }
+
+    func invalidatePreparedCall() {
+        prepareNextCall(item: nil, fileURL: nil, outputDeviceID: nil)
+    }
+
     func play(
         item: RingtoneItem,
         fileURL: URL,
@@ -26,7 +81,8 @@ final class RingtonePlayer: ObservableObject {
         fadeInOverride: TimeInterval? = nil,
         fadeOutOverride: TimeInterval? = nil,
         loopOverride: Bool? = nil,
-        outputDeviceID: AudioDeviceID? = nil
+        outputDeviceID: AudioDeviceID? = nil,
+        forIncomingCall: Bool = false
     ) {
         stop(fadeOut: false)
 
@@ -38,84 +94,48 @@ final class RingtonePlayer: ObservableObject {
         let effectiveVolume = min(max(masterVolume * item.volume, 0), 1.0)
         let fadeIn = fadeInOverride ?? item.fadeInDuration
         let shouldLoop = loopOverride ?? item.loopEnabled
-        let isTrimmed = item.trimStart > 0.05 || item.trimEnd < (item.duration - 0.05)
-
-        // Use AVAudioPlayer when playing full file on System Default Output (supports MP3, WAV, M4A, M4R, CAF, AAC, FLAC reliably)
-        if outputDeviceID == nil && !isTrimmed {
-            do {
-                let player = try AVAudioPlayer(contentsOf: fileURL)
-                player.numberOfLoops = shouldLoop ? -1 : 0
-                player.prepareToPlay()
-
-                if fadeIn > 0.1 {
-                    player.volume = 0
-                    guard player.play() else { throw CocoaError(.fileReadUnknown) }
-                    player.setVolume(effectiveVolume, fadeDuration: fadeIn)
-                } else {
-                    player.volume = effectiveVolume
-                    guard player.play() else { throw CocoaError(.fileReadUnknown) }
-                }
-
-                self.avPlayer = player
-                self.isPlaying = true
-                self.activeRingtoneID = item.id
-                self.playbackStartDate = Date()
-                self.lastPlaybackError = nil
-                startProgressTimer(item: item, loop: shouldLoop)
-
-                if !shouldLoop {
-                    let duration = player.duration
-                    let gen = loopGeneration
-                    DispatchQueue.main.asyncAfter(deadline: .now() + duration + 0.15) { [weak self] in
-                        guard let self, self.loopGeneration == gen else { return }
-                        self.stop(fadeOut: false)
-                    }
-                }
-                return
-            } catch {
-                // Fall back to AVAudioEngine below if AVAudioPlayer cannot decode
-                lastPlaybackError = error.localizedDescription
-            }
+        let request = Preparation(item: item, url: fileURL, deviceID: outputDeviceID)
+        let matchesPreparation = forIncomingCall && shouldLoop && request == requestedPreparation
+        let cached = matchesPreparation ? preparedAudio : nil
+        if matchesPreparation {
+            invalidatePreparedCall()
         }
 
-        // AVAudioEngine path for trimmed clips or custom Core Audio output device routing
         do {
-            let newEngine = AVAudioEngine()
-            let node = AVAudioPlayerNode()
-            newEngine.attach(node)
+            var audio = try cached ?? Self.prepareAudio(request, loop: shouldLoop)
+            if case .player(let player) = audio {
+                player.volume = fadeIn > 0.1 ? 0 : effectiveVolume
+                if player.play() {
+                    if fadeIn > 0.1 {
+                        player.setVolume(effectiveVolume, fadeDuration: fadeIn)
+                    }
 
-            if let outputDeviceID, outputDeviceID != kAudioObjectUnknown,
-               let audioUnit = newEngine.outputNode.audioUnit {
-                var id = outputDeviceID
-                let status = AudioUnitSetProperty(
-                    audioUnit,
-                    kAudioOutputUnitProperty_CurrentDevice,
-                    kAudioUnitScope_Global,
-                    0,
-                    &id,
-                    UInt32(MemoryLayout<AudioDeviceID>.size)
-                )
-                guard status == noErr else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
+                    self.avPlayer = player
+                    self.isPlaying = true
+                    self.activeRingtoneID = item.id
+                    self.playbackStartDate = Date()
+                    self.lastPlaybackError = nil
+                    startProgressTimer(item: item, loop: shouldLoop)
+
+                    if !shouldLoop {
+                        let duration = player.duration
+                        let gen = loopGeneration
+                        DispatchQueue.main.asyncAfter(deadline: .now() + duration + 0.15) { [weak self] in
+                            guard let self, self.loopGeneration == gen else { return }
+                            self.stop(fadeOut: false)
+                        }
+                    }
+                    return
+                }
+                audio = try Self.prepareEngine(request, loop: shouldLoop)
             }
-
-            let file = try AVAudioFile(forReading: fileURL)
-            newEngine.connect(node, to: newEngine.mainMixerNode, format: file.processingFormat)
-            newEngine.prepare()
-            try newEngine.start()
+            guard case let .engine(newEngine, node, file, startFrame, frameCount, buffer) = audio else {
+                throw CocoaError(.fileReadUnknown)
+            }
 
             self.engine = newEngine
             self.playerNode = node
             self.audioFile = file
-
-            let sampleRate = file.processingFormat.sampleRate
-            guard item.trimStart.isFinite, item.trimEnd.isFinite,
-                  item.trimStart >= 0, item.trimStart < Double(file.length) / sampleRate,
-                  item.trimEnd > item.trimStart else { throw CocoaError(.fileReadCorruptFile) }
-            let startFrame = AVAudioFramePosition(item.trimStart * sampleRate)
-            let endFrame = AVAudioFramePosition(min(Double(file.length), item.trimEnd * sampleRate))
-            let frames = endFrame - startFrame
-            guard frames > 0, frames <= Int64(UInt32.max) else { throw CocoaError(.fileReadTooLarge) }
-            let frameCount = AVAudioFrameCount(frames)
 
             loopGeneration += 1
             let generation = loopGeneration
@@ -127,7 +147,7 @@ final class RingtonePlayer: ObservableObject {
                 node.volume = effectiveVolume
             }
 
-            if shouldLoop, let buffer = try Self.loopingBuffer(file: file, startFrame: startFrame, frameCount: frameCount) {
+            if let buffer {
                 node.scheduleBuffer(buffer, at: nil, options: .loops)
             } else {
                 // Keep two streamed segments queued so the UI thread is one loop ahead.
@@ -138,6 +158,7 @@ final class RingtonePlayer: ObservableObject {
                                 frameCount: frameCount, loop: shouldLoop, generation: generation)
             }
 
+            try newEngine.start()
             node.play()
             isPlaying = true
             activeRingtoneID = item.id
@@ -148,6 +169,49 @@ final class RingtonePlayer: ObservableObject {
             lastPlaybackError = "Playback failed: \(error.localizedDescription)"
             stop(fadeOut: false)
         }
+    }
+
+    private nonisolated static func prepareAudio(_ request: Preparation, loop: Bool) throws -> PreparedAudio {
+        try Task.checkCancellation()
+        let item = request.item
+        let isTrimmed = item.trimStart > 0.05 || item.trimEnd < item.duration - 0.05
+        if request.deviceID == nil, !isTrimmed, let player = try? AVAudioPlayer(contentsOf: request.url) {
+            player.numberOfLoops = loop ? -1 : 0
+            if player.prepareToPlay() {
+                return .player(player)
+            }
+        }
+        return try prepareEngine(request, loop: loop)
+    }
+
+    private nonisolated static func prepareEngine(_ request: Preparation, loop: Bool) throws -> PreparedAudio {
+        let file = try AVAudioFile(forReading: request.url)
+        let item = request.item
+        let sampleRate = file.processingFormat.sampleRate
+        guard item.trimStart.isFinite, item.trimEnd.isFinite,
+              item.trimStart >= 0, item.trimStart < Double(file.length) / sampleRate,
+              item.trimEnd > item.trimStart else { throw CocoaError(.fileReadCorruptFile) }
+        let startFrame = AVAudioFramePosition(item.trimStart * sampleRate)
+        let endFrame = AVAudioFramePosition(min(Double(file.length), item.trimEnd * sampleRate))
+        let frames = endFrame - startFrame
+        guard frames > 0, frames <= Int64(UInt32.max) else { throw CocoaError(.fileReadTooLarge) }
+        let frameCount = AVAudioFrameCount(frames)
+        let buffer = loop ? try loopingBuffer(file: file, startFrame: startFrame, frameCount: frameCount) : nil
+        try Task.checkCancellation()
+
+        let engine = AVAudioEngine()
+        let node = AVAudioPlayerNode()
+        engine.attach(node)
+        if var id = request.deviceID, id != kAudioObjectUnknown, let audioUnit = engine.outputNode.audioUnit {
+            let status = AudioUnitSetProperty(
+                audioUnit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global,
+                0, &id, UInt32(MemoryLayout<AudioDeviceID>.size)
+            )
+            guard status == noErr else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
+        }
+        engine.connect(node, to: engine.mainMixerNode, format: file.processingFormat)
+        engine.prepare()
+        return .engine(engine, node, file, startFrame, frameCount, buffer)
     }
 
     nonisolated static func loopingBuffer(file: AVAudioFile, startFrame: AVAudioFramePosition,
@@ -172,6 +236,7 @@ final class RingtonePlayer: ObservableObject {
         let bytesPerFrame = Int(file.processingFormat.streamDescription.pointee.mBytesPerFrame)
         var copied: AVAudioFrameCount = 0
         while copied < frameCount {
+            try Task.checkCancellation()
             try file.read(into: chunk, frameCount: min(chunk.frameCapacity, frameCount - copied))
             guard chunk.frameLength > 0 else { throw CocoaError(.fileReadCorruptFile) }
             let destination = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
