@@ -28,6 +28,9 @@ final class CallMonitorEngine: ObservableObject {
     private var activeCallHadAppleWindow = false
     private var lastAppleCallWindowVisible: Bool?
     private var appleAudioQuietSince: TimeInterval?
+    private var pausedForAppleSilence = false
+    private var ringingAXWindow: AXUIElement?
+    private var ringingWindowObserver: AXObserver?
     @Published private(set) var hasCallUIPermission = AXIsProcessTrusted()
 
     private var monitorTask: Task<Void, Never>?
@@ -88,19 +91,23 @@ final class CallMonitorEngine: ObservableObject {
         monitorTask?.cancel()
         monitorTask = Task(priority: .userInitiated) { [weak self] in
             while !Task.isCancelled {
+                guard let self, self.isMonitoring else { break }
+                let previousWindow = self.ringingAXWindow
                 let snapshotTime = ProcessInfo.processInfo.systemUptime
                 let snapshot = await Task.detached(priority: .userInitiated) {
                     autoreleasepool {
                         let procs = AudioSuppressionEngine.fetchActiveAudioProcesses()
                         let windows = CallMonitorEngine.fetchVisibleWindowTitlesByPID()
-                        return (procs, windows?.titles, AppleCallUI.incomingState(), windows?.appleCallWindowVisible)
+                        return (procs, windows?.titles, AppleCallUI.incomingState(previousWindow: previousWindow), windows?.appleCallWindowVisible)
                     }
                 }.value
 
-                guard let self, self.isMonitoring, !Task.isCancelled else { break }
-                self.processSnapshot(audioProcesses: snapshot.0, windowTitlesByPID: snapshot.1, capturedAt: snapshotTime, appleIncoming: snapshot.2, appleCallWindowVisible: snapshot.3)
+                guard self.isMonitoring, !Task.isCancelled else { break }
+                self.processSnapshot(audioProcesses: snapshot.0, windowTitlesByPID: snapshot.1, capturedAt: snapshotTime,
+                                     appleIncoming: snapshot.2.incoming, appleCallWindowVisible: snapshot.3,
+                                     appleAXWindow: snapshot.2.window)
 
-                let sleepNs: UInt64 = (self.activeCall != nil) ? 35_000_000 : 50_000_000
+                let sleepNs: UInt64 = (self.activeCall != nil) ? 15_000_000 : 50_000_000
                 try? await Task.sleep(nanoseconds: sleepNs)
             }
         }
@@ -115,6 +122,8 @@ final class CallMonitorEngine: ObservableObject {
 
         if activeCall != nil {
             endActiveCall(reason: "Monitoring stopped")
+        } else {
+            suppressionEngine?.suppressAppleRingtoneDuringRearm(for: nil, processes: [])
         }
         if !appStates.isEmpty {
             appStates.removeAll()
@@ -131,6 +140,8 @@ final class CallMonitorEngine: ObservableObject {
         guard let settings = settingsStore, let library = libraryManager else { return }
         if activeCall != nil {
             endActiveCall(reason: "Replaced by test call")
+        } else {
+            suppressionEngine?.suppressAppleRingtoneDuringRearm(for: nil, processes: [])
         }
 
         let event = DetectedCallEvent(
@@ -151,7 +162,10 @@ final class CallMonitorEngine: ObservableObject {
         endActiveCall(reason: "Stopped manually")
     }
 
-    func processSnapshot(audioProcesses: [AudioProcessInfo], windowTitlesByPID: [pid_t: [String]]?, capturedAt: TimeInterval = ProcessInfo.processInfo.systemUptime, appleIncoming: Bool? = nil, appleCallWindowVisible: Bool? = nil) {
+    func processSnapshot(audioProcesses: [AudioProcessInfo], windowTitlesByPID: [pid_t: [String]]?,
+                         capturedAt: TimeInterval = ProcessInfo.processInfo.systemUptime,
+                         appleIncoming: Bool? = nil, appleCallWindowVisible: Bool? = nil,
+                         appleAXWindow: AXUIElement? = nil) {
         guard capturedAt >= lastSnapshotTime else { return }
         lastSnapshotTime = capturedAt
         let appleWindowOpened = appleCallWindowVisible == true && lastAppleCallWindowVisible == false
@@ -176,33 +190,17 @@ final class CallMonitorEngine: ObservableObject {
             endActiveCall(reason: "Calling app disabled")
             return
         }
-        guard !enabledApps.isEmpty else { return }
+        var appleAppWaitingToRearm: CallingApp?
+        defer {
+            if activeCall == nil {
+                suppressionEngine?.suppressAppleRingtoneDuringRearm(for: appleAppWaitingToRearm, processes: audioProcesses)
+            }
+        }
 
         // Shared Apple audio daemons must not start a second ringtone over the active one.
         let appsToInspect = activeCall.map { [$0.app] } ?? enabledApps
         for app in appsToInspect {
-            let matchingProcs = audioProcesses.filter { proc in
-                app.bundleIdentifiers.contains { proc.bundleID.caseInsensitiveCompare($0) == .orderedSame } ||
-                app.audioProcessNames.contains {
-                    proc.processName.localizedCaseInsensitiveContains($0) ||
-                    proc.bundleID.localizedCaseInsensitiveContains($0)
-                }
-            }
-
-            let isOutputting = matchingProcs.contains { $0.isRunningOutput }
-            let isMicActive = matchingProcs.contains { $0.isRunningInput }
-            let appPIDs = app.bundleIdentifiers.flatMap {
-                NSRunningApplication.runningApplications(withBundleIdentifier: $0).map(\.processIdentifier)
-            }
-            let pids = Set(matchingProcs.map { $0.pid } + appPIDs)
             let isAppleCall = app.isContinuityPhone || app.id == "com.apple.FaceTime"
-            let useAppleUI = isAppleCall && (appleIncoming == true || (activeCallHadAppleUI && appleIncoming == nil))
-            let visibleAppleWindow = isAppleCall && appleCallWindowVisible == true && appleIncoming != false
-            let hasIncomingWindow = useAppleUI || visibleAppleWindow || (windowTitlesByPID.map {
-                Self.checkIncomingWindow(pids: pids, keywords: app.incomingWindowKeywords, windowMap: $0)
-            } ?? (activeCall?.app.id == app.id && activeCallHadIncomingWindow))
-
-            let previousState = appStates[app.id] ?? .idle
             if isAppleCall, activeCall?.app.id == app.id {
                 if activeCallHadAppleWindow && appleCallWindowVisible == false && appleIncoming != true {
                     endActiveCall(reason: "Apple call window dismissed")
@@ -217,6 +215,27 @@ final class CallMonitorEngine: ObservableObject {
                     activeCallHadAppleWindow = true
                 }
             }
+            let matchingProcs = audioProcesses.filter { proc in
+                app.bundleIdentifiers.contains { proc.bundleID.caseInsensitiveCompare($0) == .orderedSame } ||
+                app.audioProcessNames.contains {
+                    proc.processName.localizedCaseInsensitiveContains($0) ||
+                    proc.bundleID.localizedCaseInsensitiveContains($0)
+                }
+            }
+
+            let isOutputting = matchingProcs.contains { $0.isRunningOutput }
+            let isMicActive = matchingProcs.contains { $0.isRunningInput }
+            let appPIDs = app.bundleIdentifiers.flatMap {
+                NSRunningApplication.runningApplications(withBundleIdentifier: $0).map(\.processIdentifier)
+            }
+            let pids = Set(matchingProcs.map { $0.pid } + appPIDs)
+            let useAppleUI = isAppleCall && (appleIncoming == true || (activeCallHadAppleUI && appleIncoming == nil))
+            let visibleAppleWindow = isAppleCall && appleCallWindowVisible == true && appleIncoming != false
+            let hasIncomingWindow = useAppleUI || visibleAppleWindow || (windowTitlesByPID.map {
+                Self.checkIncomingWindow(pids: pids, keywords: app.incomingWindowKeywords, windowMap: $0)
+            } ?? (activeCall?.app.id == app.id && activeCallHadIncomingWindow))
+
+            let previousState = appStates[app.id] ?? .idle
             if isAppleCall, activeCall?.app.id == app.id, appleIncoming == true {
                 activeCallHadAppleUI = true
             }
@@ -283,6 +302,9 @@ final class CallMonitorEngine: ObservableObject {
             if previousState == .connected && !hasIncomingWindow {
                 if let connectedAt = connectedSinceTime[app.id] {
                     let elapsed = capturedAt - connectedAt
+                    if isAppleCall, appleIncoming != false, isOutputting || elapsed < postCallCooldownSeconds {
+                        appleAppWaitingToRearm = app
+                    }
                     if elapsed < postCallCooldownSeconds {
                         // Still within cooldown — ignore all audio signals from this app.
                         continue
@@ -316,6 +338,9 @@ final class CallMonitorEngine: ObservableObject {
                     } else if teardownQuietSince[app.id] == nil {
                         teardownQuietSince[app.id] = capturedAt
                     }
+                    if isAppleCall, appleIncoming != false, awaitingTeardownByApp.contains(app.id) {
+                        appleAppWaitingToRearm = app
+                    }
                     continue
                 }
             }
@@ -336,14 +361,24 @@ final class CallMonitorEngine: ObservableObject {
                     activeCallHadAppleUI = isAppleCall && appleIncoming == true
                     activeCallHadAppleWindow = isAppleCall && (appleCallWindowVisible == true || visibleAppleWindow)
                     if activeCallHadAppleWindow { logger.notice("Apple call window visible; window-close stop enabled") }
+                    if isAppleCall, let appleAXWindow { observeRingingWindow(appleAXWindow) }
                     return
                 }
+                if isAppleCall {
+                    // shortcut: without call UI, native silence can also be a gap between ringtone pulses.
+                    let nativeRingQuiet = !hasIncomingWindow &&
+                        suppressionEngine?.isAppleRingQuiet(targetApp: app, processes: audioProcesses) == true
+                    setAppleRingPaused(nativeRingQuiet, source: "native tap went quiet")
+                }
+                if isAppleCall, let appleAXWindow { observeRingingWindow(appleAXWindow) }
             } else if previousState == .ringing {
                 if isAppleCall, appleIncoming == nil, activeCall?.app.id == app.id {
-                    let quietStart = appleAudioQuietSince ?? capturedAt
-                    appleAudioQuietSince = quietStart
-                    // shortcut: bridge brief gaps when the audio stream is the only available call signal.
-                    if capturedAt - quietStart < 0.9 { return }
+                    if appleAudioQuietSince == nil {
+                        setAppleRingPaused(true, source: "audio stream stopped")
+                        appleAudioQuietSince = capturedAt
+                    }
+                    // shortcut: keep the audio-only call session briefly so a returning stream resumes the same tone.
+                    if capturedAt - (appleAudioQuietSince ?? capturedAt) < 0.9 { return }
                 }
                 appStates[app.id] = .idle
                 if activeCall?.app.id == app.id {
@@ -448,6 +483,7 @@ final class CallMonitorEngine: ObservableObject {
 
     private func endActiveCall(reason: String, waitForTeardown: Bool = true) {
         ringtonePlayer?.stop(fadeOut: false)
+        clearRingingWindowObserver()
         suppressionEngine?.stopSuppressing()
         if let current = activeCall {
             logger.notice("Ring stop app=\(current.app.id, privacy: .private) reason=\(reason, privacy: .public)")
@@ -467,6 +503,52 @@ final class CallMonitorEngine: ObservableObject {
         activeCallHadAppleUI = false
         activeCallHadAppleWindow = false
         appleAudioQuietSince = nil
+        pausedForAppleSilence = false
+    }
+
+    private func setAppleRingPaused(_ paused: Bool, source: String) {
+        guard paused != pausedForAppleSilence else { return }
+        pausedForAppleSilence = paused
+        if paused {
+            ringtonePlayer?.pauseRinging()
+            logger.notice("Ringtone audio paused: \(source, privacy: .public)")
+        } else {
+            ringtonePlayer?.resumeRinging()
+        }
+    }
+
+    private func observeRingingWindow(_ window: AXUIElement) {
+        if let ringingAXWindow, CFEqual(ringingAXWindow, window) { return }
+        clearRingingWindowObserver()
+        ringingAXWindow = window
+
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(window, &pid) == .success else { return }
+        var observer: AXObserver?
+        let status = AXObserverCreate(pid, { _, element, _, context in
+            guard let context else { return }
+            MainActor.assumeIsolated {
+                let monitor = Unmanaged<CallMonitorEngine>.fromOpaque(context).takeUnretainedValue()
+                guard let current = monitor.ringingAXWindow, CFEqual(element, current) else { return }
+                // A scan started before the close must not resurrect the dismissed call.
+                monitor.lastSnapshotTime = ProcessInfo.processInfo.systemUptime
+                monitor.endActiveCall(reason: "Apple call window closed (Accessibility)")
+            }
+        }, &observer)
+        guard status == .success, let observer else { return }
+        let context = Unmanaged.passUnretained(self).toOpaque()
+        guard AXObserverAddNotification(observer, window, kAXUIElementDestroyedNotification as CFString, context) == .success else { return }
+        ringingWindowObserver = observer
+        CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
+    }
+
+    private func clearRingingWindowObserver() {
+        if let observer = ringingWindowObserver, let window = ringingAXWindow {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
+            AXObserverRemoveNotification(observer, window, kAXUIElementDestroyedNotification as CFString)
+        }
+        ringingWindowObserver = nil
+        ringingAXWindow = nil
     }
 
     func clearRecentEvents() {
@@ -533,10 +615,13 @@ final class CallMonitorEngine: ObservableObject {
             Task.detached(priority: .userInitiated) {
                 let procs = AudioSuppressionEngine.fetchActiveAudioProcesses()
                 let windows = CallMonitorEngine.fetchVisibleWindowTitlesByPID()
-                let incoming = AppleCallUI.incomingState()
+                let previousWindow = await MainActor.run { self?.ringingAXWindow }
+                let incoming = AppleCallUI.incomingState(previousWindow: previousWindow)
                 await MainActor.run {
                     guard let self, self.isMonitoring else { return }
-                    self.processSnapshot(audioProcesses: procs, windowTitlesByPID: windows?.titles, capturedAt: snapshotTime, appleIncoming: incoming, appleCallWindowVisible: windows?.appleCallWindowVisible)
+                    self.processSnapshot(audioProcesses: procs, windowTitlesByPID: windows?.titles, capturedAt: snapshotTime,
+                                         appleIncoming: incoming.incoming, appleCallWindowVisible: windows?.appleCallWindowVisible,
+                                         appleAXWindow: incoming.window)
                 }
             }
         }

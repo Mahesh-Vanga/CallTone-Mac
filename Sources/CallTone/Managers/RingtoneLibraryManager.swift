@@ -2,11 +2,14 @@ import Foundation
 import AVFoundation
 import UniformTypeIdentifiers
 import AppKit
+import Combine
 
 @MainActor
 final class RingtoneLibraryManager: ObservableObject {
     @Published private(set) var ringtones: [RingtoneItem] = []
     @Published var lastError: String?
+    let additionalCalls = AdditionalCallRingtoneMonitor()
+    private var additionalCallUpdates: AnyCancellable?
 
     static let supportedTypes: [UTType] = {
         var types: [UTType] = [.mp3, .wav, .mpeg4Audio, .aiff, .audio]
@@ -26,6 +29,9 @@ final class RingtoneLibraryManager: ObservableObject {
         let root = directory ?? appSupport.appendingPathComponent("CallTone", isDirectory: true)
         self.storageDirectory = root.appendingPathComponent("Ringtones", isDirectory: true)
         self.metadataURL = root.appendingPathComponent("library.json")
+        additionalCallUpdates = additionalCalls.objectWillChange.sink { [weak self] in
+            self?.objectWillChange.send()
+        }
 
         try? FileManager.default.createDirectory(at: storageDirectory, withIntermediateDirectories: true)
         loadLibrary()

@@ -11,6 +11,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private weak var library: RingtoneLibraryManager?
     private weak var monitor: CallMonitorEngine?
     private weak var player: RingtonePlayer?
+    private var whatsAppRingtone: WhatsAppRingtoneMonitor?
     private var onOpenWindow: (() -> Void)?
 
     func configure(
@@ -25,6 +26,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         self.monitor = monitor
         self.player = player
         self.onOpenWindow = onOpenWindow
+        settings.connectRingtonePlaylist(library: library, monitor: monitor, player: player)
+        let whatsAppRingtone = WhatsAppRingtoneMonitor(settings: settings, library: library, callMonitor: monitor)
+        self.whatsAppRingtone = whatsAppRingtone
+
+        monitor.$isMonitoring
+            .sink { [weak whatsAppRingtone] running in
+                whatsAppRingtone?.setMonitoring(running)
+            }
+            .store(in: &cancellables)
 
         updateVisibility(show: settings.showMenuBarIcon)
 
@@ -44,7 +54,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         monitor.$activeCall
             .receive(on: RunLoop.main)
-            .sink { [weak self] _ in
+            .sink { [weak self] call in
+                if call != nil { self?.whatsAppRingtone?.stopRingtone() }
                 self?.updateIcon()
             }
             .store(in: &cancellables)
@@ -120,6 +131,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             stopCall.target = self
             menu.addItem(stopCall)
             menu.addItem(.separator())
+        } else if whatsAppRingtone?.isRinging == true {
+            let stopCall = NSMenuItem(title: "Stop WhatsApp Ringtone", action: #selector(stopWhatsAppRingtone), keyEquivalent: "")
+            stopCall.target = self
+            menu.addItem(stopCall)
+            menu.addItem(.separator())
         } else if player.isPlaying {
             let stopPreview = NSMenuItem(title: "Stop Preview", action: #selector(stopPreviewAction), keyEquivalent: "")
             stopPreview.target = self
@@ -167,6 +183,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     @objc private func stopPreviewAction() {
         player?.stop()
+    }
+
+    @objc private func stopWhatsAppRingtone() {
+        whatsAppRingtone?.stopRingtone()
     }
 
     @objc private func toggleMonitoring() {

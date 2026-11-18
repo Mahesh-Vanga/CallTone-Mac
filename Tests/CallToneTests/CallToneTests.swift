@@ -309,6 +309,30 @@ final class CallToneTests: XCTestCase {
         }
     }
 
+    func testNativeRingMeterRequiresAudibleSamplesBeforeRecognizingSilence() {
+        var signal = AudioSuppressionEngine.RingSignal()
+        signal.observe(audible: false, at: 1)
+        XCTAssertFalse(signal.isQuiet)
+        signal.observe(audible: true, at: 2)
+        signal.observe(audible: false, at: 2.03)
+        XCTAssertFalse(signal.isQuiet)
+        signal.observe(audible: false, at: 2.07)
+        XCTAssertTrue(signal.isQuiet)
+        signal.observe(audible: true, at: 2.26)
+        XCTAssertFalse(signal.isQuiet)
+    }
+
+    func testRepeatCallSuppressionOnlyTargetsAppleRendererWithoutCallInput() {
+        let phone = CallingApp.defaultCatalog[0]
+        let renderer = AudioProcessInfo(id: 40, pid: 40, bundleID: "com.apple.InCallService",
+                                        processName: "MacInCallService", isRunningOutput: false, isRunningInput: false)
+        let systemSound = AudioProcessInfo(id: 42, pid: 42, bundleID: "", processName: "systemsoundserverd",
+                                           isRunningOutput: true, isRunningInput: false)
+        XCTAssertEqual(AudioSuppressionEngine.appleRingtoneRenderer(for: phone, in: [systemSound, renderer]), renderer)
+        XCTAssertNil(AudioSuppressionEngine.appleRingtoneRenderer(for: phone, in: [systemSound]))
+        XCTAssertNil(AudioSuppressionEngine.appleRingtoneRenderer(for: phone, in: [renderer, appleAudio(input: true)]))
+    }
+
     func testSuppressionTargetsNewAppleAudioProcessesWhileTheyAreStillQuiet() {
         let phone = CallingApp.defaultCatalog[0]
         let whatsapp = CallingApp.defaultCatalog.first { $0.name == "WhatsApp" }!
@@ -384,9 +408,24 @@ final class CallToneTests: XCTestCase {
         monitor.bind(settings: settings, library: library, suppression: nil, player: player)
         defer { monitor.stopSimulatedOrActiveCall() }
         let app = CallingApp.defaultCatalog[0]
+        settings.ringtoneRotation.mode = .single
+        monitor.processSnapshot(audioProcesses: [appleAudio()], windowTitlesByPID: [:], capturedAt: 1)
+        let audioCallID = try XCTUnwrap(monitor.activeCall).id
+        XCTAssertTrue(player.isOutputPlaying)
+        monitor.processSnapshot(audioProcesses: [], windowTitlesByPID: [:], capturedAt: 1.01)
+        XCTAssertFalse(player.isOutputPlaying, "The first quiet update must pause sound in the same callback")
+        XCTAssertEqual(monitor.activeCall?.id, audioCallID)
+        monitor.processSnapshot(audioProcesses: [appleAudio()], windowTitlesByPID: [:], capturedAt: 1.3)
+        XCTAssertTrue(player.isOutputPlaying)
+        XCTAssertEqual(monitor.activeCall?.id, audioCallID)
+        monitor.processSnapshot(audioProcesses: [appleAudio()], windowTitlesByPID: [:], capturedAt: 1.31, appleIncoming: false)
+        XCTAssertFalse(player.isOutputPlaying, "A confirmed hangup must stop even when the daemon still outputs")
+        XCTAssertNil(monitor.activeCall)
+        settings.ringtoneRotation.mode = .sequential
+
         var overridingApp = app
         overridingApp.customRingtoneID = selected[0].id
-        var capturedAt: TimeInterval = 0
+        var capturedAt: TimeInterval = 2
 
         func ring(_ app: CallingApp) -> UUID? {
             settings.callingApps = [app]
@@ -421,6 +460,53 @@ final class CallToneTests: XCTestCase {
         settings.ringtoneRotation.toneIDs = [trimmed.id]
         library.deleteItem(trimmed)
         XCTAssertEqual(ring(app), selected[2].id)
+    }
+
+    @MainActor
+    func testPlaylistAdvancesAcrossPhoneWhatsAppAndFaceTimeAndKeepsSingleAssignments() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let settings = SettingsStore(directory: directory)
+        let library = RingtoneLibraryManager(directory: directory)
+        let player = RingtonePlayer()
+        let monitor = CallMonitorEngine()
+        let ids = Array(library.ringtones.prefix(3).map(\.id))
+        XCTAssertEqual(ids.count, 3)
+        let phone = CallingApp.defaultCatalog[0]
+        let faceTime = CallingApp.defaultCatalog[1]
+        let whatsapp = try XCTUnwrap(CallingApp.defaultCatalog.first { $0.id == WhatsAppRingtoneMonitor.bundleID })
+        for app in [phone, whatsapp, faceTime] {
+            settings.setCustomRingtone(ids[2], for: app)
+        }
+        settings.masterVolume = 0
+        settings.ringtoneRotation = RingtoneRotation(mode: .sequential, toneIDs: ids)
+        monitor.bind(settings: settings, library: library, suppression: nil, player: player)
+        settings.connectRingtonePlaylist(library: library, monitor: monitor, player: player)
+
+        func callThroughMonitor(_ original: CallingApp) throws -> UUID {
+            let app = try XCTUnwrap(settings.callingApps.first { $0.id == original.id })
+            let orderBeforeCall = settings.ringtoneRotation.playbackOrder
+            monitor.simulateIncomingCall(for: app)
+            defer { monitor.stopSimulatedOrActiveCall() }
+            XCTAssertEqual(settings.ringtoneRotation.playbackOrder, orderBeforeCall)
+            return try XCTUnwrap(player.activeRingtoneID)
+        }
+
+        XCTAssertEqual(try callThroughMonitor(phone), ids[0])
+        XCTAssertEqual(settings.ringtoneRotation.playbackOrder?.first, ids[1])
+        XCTAssertEqual(settings.ringtoneRotation.cycle(after: ids[0]), [ids[1]])
+        let whatsappProfile = try XCTUnwrap(settings.callingApps.first { $0.id == whatsapp.id })
+        let whatsappTone = try XCTUnwrap(settings.ringtoneForIncomingCall(from: whatsappProfile, library: library))
+        XCTAssertEqual(whatsappTone.id, ids[1])
+        settings.advanceRingtonePlaylist(after: whatsappTone.id)
+        XCTAssertEqual(try callThroughMonitor(faceTime), ids[2])
+        XCTAssertEqual(try callThroughMonitor(phone), ids[0])
+        XCTAssertEqual(SettingsStore(directory: directory).ringtoneRotation, RingtoneRotation(mode: .sequential, toneIDs: ids))
+
+        settings.ringtoneRotation.mode = .single
+        for app in [phone, whatsapp, faceTime] {
+            XCTAssertEqual(settings.callingApps.first { $0.id == app.id }?.customRingtoneID, ids[2])
+        }
     }
 
     @MainActor
@@ -566,6 +652,62 @@ final class CallToneTests: XCTestCase {
         library.deleteItem(copy!)
         library.restoreBuiltInSamples()
         XCTAssertGreaterThanOrEqual(library.ringtones.count, 5)
+    }
+
+    func testWhatsAppRequiresBothIncomingControls() {
+        XCTAssertTrue(WhatsAppRingtoneMonitor.hasIncomingControls(["CallUI_AcceptButton", "CallUI_DeclineButton"]))
+        XCTAssertFalse(WhatsAppRingtoneMonitor.hasIncomingControls(["CallUI_DeclineButton"]))
+        XCTAssertFalse(WhatsAppRingtoneMonitor.hasIncomingControls(["CallUI_EndCallButton", "CallUI_MuteButton"]))
+    }
+
+    func testAdditionalCallControlsRequireIncomingEvidence() {
+        XCTAssertTrue(AdditionalCallRingtoneMonitor.hasIncomingControls(buttons: ["Accept with audio", "Decline call"], hasIncomingLabel: false))
+        XCTAssertTrue(AdditionalCallRingtoneMonitor.hasIncomingControls(buttons: ["Answer Call", "Decline"], hasIncomingLabel: false))
+        XCTAssertTrue(AdditionalCallRingtoneMonitor.hasIncomingControls(buttons: ["Accept", "Decline"], hasIncomingLabel: true))
+        XCTAssertFalse(AdditionalCallRingtoneMonitor.hasIncomingControls(buttons: ["Accept", "Decline"], hasIncomingLabel: false))
+        XCTAssertFalse(AdditionalCallRingtoneMonitor.hasIncomingControls(buttons: ["Join meeting", "Dismiss"], hasIncomingLabel: true))
+        XCTAssertFalse(AdditionalCallRingtoneMonitor.hasIncomingControls(buttons: ["End call", "Mute"], hasIncomingLabel: true))
+    }
+
+    func testGoogleMeetAudioScopeExcludesOrdinaryBrowserAndSystemSounds() {
+        let pwa = AdditionalCallRingtoneMonitor.meetAppBundleID
+        XCTAssertTrue(AdditionalCallRingtoneMonitor.isGoogleMeetDocument(URL(string: "https://meet.google.com/calls")!))
+        XCTAssertFalse(AdditionalCallRingtoneMonitor.isGoogleMeetDocument(URL(string: "https://meet.google.com.example.org/calls")!))
+        XCTAssertFalse(AdditionalCallRingtoneMonitor.isGoogleMeetDocument(URL(string: "https://google.com/meet.google.com")!))
+        func process(_ bundleID: String, pid: pid_t) -> AudioProcessInfo {
+            AudioProcessInfo(id: UInt32(pid), pid: pid, bundleID: bundleID, processName: "",
+                             isRunningOutput: true, isRunningInput: false)
+        }
+        XCTAssertTrue(AdditionalCallRingtoneMonitor.audioBelongsToApp(process(pwa + ".helper", pid: 2), pids: [1], bundleIDs: [pwa]))
+        XCTAssertTrue(AdditionalCallRingtoneMonitor.audioBelongsToApp(process("", pid: 1), pids: [1], bundleIDs: [pwa]))
+        XCTAssertFalse(AdditionalCallRingtoneMonitor.audioBelongsToApp(process("com.google.Chrome.helper.renderer", pid: 2), pids: [1], bundleIDs: [pwa]))
+        XCTAssertFalse(AdditionalCallRingtoneMonitor.audioBelongsToApp(process("systemsoundserverd", pid: 2), pids: [1], bundleIDs: [pwa]))
+    }
+
+    @MainActor
+    func testAdditionalCallingAppMigrationKeepsSelectedToneAndAppleProfile() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let suiteName = "CallToneTest.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let library = RingtoneLibraryManager(directory: directory)
+        let settings = SettingsStore(directory: directory)
+        let monitor = CallMonitorEngine()
+        let phone = CallingApp.defaultCatalog[0]
+        var signal = try XCTUnwrap(CallingApp.defaultCatalog.first { $0.name == "Signal" })
+        signal.customRingtoneID = try XCTUnwrap(library.ringtones.first).id
+        settings.callingApps = [phone, signal]
+
+        let additionalCalls = AdditionalCallRingtoneMonitor(defaults: defaults)
+        additionalCalls.connect(settings: settings, library: library, monitor: monitor)
+        let profiles = settings.callingApps
+        XCTAssertTrue(try XCTUnwrap(profiles.first { $0.id == phone.id }).isEnabled)
+        let legacySignal = try XCTUnwrap(profiles.first { $0.id == signal.id })
+        XCTAssertFalse(legacySignal.isEnabled)
+        XCTAssertTrue(additionalCalls.displayProfile(legacySignal).isEnabled)
+        XCTAssertEqual(legacySignal.customRingtoneID, signal.customRingtoneID)
+        XCTAssertTrue(AdditionalCallRingtoneMonitor(defaults: defaults).displayProfile(legacySignal).isEnabled)
     }
 
     @MainActor

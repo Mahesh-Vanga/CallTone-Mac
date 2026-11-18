@@ -287,6 +287,20 @@ final class RingtonePlayer: ObservableObject {
         }
     }
 
+    var isOutputPlaying: Bool {
+        avPlayer?.isPlaying ?? playerNode?.isPlaying ?? false
+    }
+
+    func pauseRinging() {
+        avPlayer?.pause()
+        playerNode?.pause()
+    }
+
+    func resumeRinging() {
+        avPlayer?.play()
+        playerNode?.play()
+    }
+
     func stop(fadeOut: Bool = true, fadeOutDuration: TimeInterval = 0.25) {
         fadeTimer?.invalidate()
         fadeTimer = nil

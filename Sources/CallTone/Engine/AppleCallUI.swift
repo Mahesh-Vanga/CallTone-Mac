@@ -3,27 +3,37 @@ import ApplicationServices
 import OSLog
 
 enum AppleCallUI {
+    struct Snapshot {
+        let incoming: Bool?
+        let window: AXUIElement?
+    }
+
     private static let diagnosticLock = NSLock()
     nonisolated(unsafe) private static var lastDiagnostic = ""
     private static let logger = Logger(subsystem: "com.calltone.macos", category: "CallDetection")
 
-    nonisolated private static func report(_ state: Bool?, _ reason: String) -> Bool? {
+    nonisolated private static func report(_ state: Bool?, _ reason: String, window: AXUIElement? = nil) -> Snapshot {
         diagnosticLock.lock()
         let changed = reason != lastDiagnostic
         lastDiagnostic = reason
         diagnosticLock.unlock()
         if changed { logger.notice("Apple UI detection: \(reason, privacy: .public)") }
-        return state
+        return Snapshot(incoming: state, window: window)
     }
 
     static let bundleIDs = ["com.apple.InCallService", "com.apple.notificationcenterui"]
 
-    nonisolated static func incomingState() -> Bool? {
+    nonisolated static func incomingState(previousWindow: AXUIElement?) -> Snapshot {
         // The attribute query enforces access and provides the actual permission error.
         let apps = bundleIDs.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0) }
         if apps.isEmpty { return report(nil, "Call UI service not running") }
-        var labels: [String] = []
+        var labelsByWindow: [AXUIElement: [String]] = [:]
         var sawWindow = false
+        var previousWindowClosed = false
+        var previousPID: pid_t = 0
+        if let previousWindow {
+            AXUIElementGetPid(previousWindow, &previousPID)
+        }
         let deadline = ProcessInfo.processInfo.systemUptime + 0.04
         for app in apps {
             let element = AXUIElementCreateApplication(app.processIdentifier)
@@ -33,11 +43,17 @@ enum AppleCallUI {
             guard windowResult == .success, let windows = rawWindows as? [AXUIElement] else {
                 continue
             }
+            if let previousWindow, app.processIdentifier == previousPID {
+                previousWindowClosed = !windows.contains { CFEqual($0, previousWindow) }
+            }
             sawWindow = sawWindow || !windows.isEmpty
-            var pending = windows
+            var pending = windows.map { (node: $0, window: $0) }
             var visited = 0
-            while let node = pending.popLast() {
-                guard visited < 256, ProcessInfo.processInfo.systemUptime < deadline else { return report(nil, "Call UI scan exceeded its budget") }
+            while let (node, window) = pending.popLast() {
+                guard visited < 256, ProcessInfo.processInfo.systemUptime < deadline else {
+                    return previousWindowClosed ? report(false, "Incoming-call window closed")
+                        : report(nil, "Call UI scan exceeded its budget")
+                }
                 visited += 1
                 AXUIElementSetMessagingTimeout(node, 0.01)
                 var role: CFTypeRef?
@@ -48,21 +64,24 @@ enum AppleCallUI {
                         var value: CFTypeRef?
                         let result = AXUIElementCopyAttributeValue(node, attribute as CFString, &value)
                         if result == .cannotComplete || result == .invalidUIElement { continue }
-                        if let text = value as? String { labels.append(text) }
+                        if let text = value as? String { labelsByWindow[window, default: []].append(text) }
                     }
-                    if incomingState(buttonLabels: labels) == true {
-                        return report(true, "Incoming Answer/Decline controls found")
+                    if incomingState(buttonLabels: labelsByWindow[window, default: []]) == true {
+                        return report(true, "Incoming Answer/Decline controls found", window: window)
                     }
                 }
                 var children: CFTypeRef?
                 let childResult = AXUIElementCopyAttributeValue(node, kAXChildrenAttribute as CFString, &children)
                 if childResult == .cannotComplete || childResult == .invalidUIElement { continue }
-                if let items = children as? [AXUIElement] { pending.append(contentsOf: items) }
+                if let items = children as? [AXUIElement] {
+                    pending.append(contentsOf: items.map { ($0, window) })
+                }
             }
         }
+        if previousWindowClosed { return report(false, "Incoming-call window closed") }
         if !sawWindow { return report(nil, "Call UI has no windows") }
-        let state = incomingState(buttonLabels: labels)
-        return report(state, state == false ? "Active-call controls found" : (state == true ? "Incoming Answer/Decline controls found" : "Unrecognized call UI controls: \(labels.count)"))
+        let sawActiveCall = labelsByWindow.values.contains { incomingState(buttonLabels: $0) == false }
+        return sawActiveCall ? report(false, "Active-call controls found") : report(nil, "Unrecognized call UI controls")
     }
 
     private static let answerKeywords = [

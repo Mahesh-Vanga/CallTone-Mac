@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import AppKit
 import CoreAudio
 import ServiceManagement
@@ -22,8 +23,81 @@ enum AppearanceMode: String, Codable, CaseIterable, Identifiable {
 @MainActor
 final class SettingsStore: ObservableObject {
     @Published var globalRingtoneID: UUID? { didSet { save() } }
-    @Published var ringtoneRotation = RingtoneRotation() { didSet { save() } }
-    @Published var callingApps: [CallingApp] = CallingApp.defaultCatalog { didSet { save() } }
+    @Published var ringtoneRotation = RingtoneRotation() {
+        didSet {
+            if ringtoneRotation.mode != oldValue.mode || ringtoneRotation.toneIDs != oldValue.toneIDs {
+                save()
+            }
+        }
+    }
+    @Published private var configuredCallingApps = CallingApp.defaultCatalog {
+        didSet {
+            playlistCallingApps = configuredCallingApps.map { app in
+                var playlistApp = app
+                playlistApp.customRingtoneID = nil
+                return playlistApp
+            }
+            save()
+        }
+    }
+    private var playlistCallingApps = CallingApp.defaultCatalog
+    private var playlistConfiguration: RingtoneRotation?
+    private var lastPlaylistToneID: UUID?
+    private var playlistChanges: AnyCancellable?
+    private var playlistPlayback: AnyCancellable?
+    private var playlistCallEnd: AnyCancellable?
+    private var playingPlaylistToneID: UUID?
+
+    var callingApps: [CallingApp] {
+        get { ringtoneRotation.isPlayingPlaylist ? playlistCallingApps : configuredCallingApps }
+        set { configuredCallingApps = newValue }
+    }
+
+    func connectRingtonePlaylist(library: RingtoneLibraryManager, monitor: CallMonitorEngine, player: RingtonePlayer) {
+        prepareRingtonePlaylist(from: library)
+        playlistChanges = Publishers.CombineLatest(
+            $ringtoneRotation.map { RingtoneRotation(mode: $0.mode, toneIDs: $0.toneIDs) }.removeDuplicates(),
+            library.$ringtones.map { $0.map(\.id) }.removeDuplicates()
+        )
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self, weak library] _, _ in
+            if let library { self?.prepareRingtonePlaylist(from: library) }
+        }
+        playlistPlayback = player.$activeRingtoneID.dropFirst().compactMap { $0 }
+            .sink { [weak self, weak monitor] toneID in
+                if let self, monitor?.activeCall != nil, self.ringtoneRotation.isPlayingPlaylist,
+                   self.ringtoneRotation.playbackOrder?.first == toneID {
+                    self.playingPlaylistToneID = toneID
+                }
+            }
+        playlistCallEnd = monitor.$activeCall.dropFirst()
+            .sink { [weak self] call in
+                guard call == nil, let self, let toneID = self.playingPlaylistToneID else { return }
+                self.playingPlaylistToneID = nil
+                self.advanceRingtonePlaylist(after: toneID)
+            }
+    }
+
+    private func prepareRingtonePlaylist(from library: RingtoneLibraryManager) {
+        let configuration = RingtoneRotation(mode: ringtoneRotation.mode, toneIDs: ringtoneRotation.toneIDs)
+            .available(in: library.ringtones)
+        guard configuration != playlistConfiguration else { return }
+        playlistConfiguration = configuration
+        let order = configuration.cycle(after: lastPlaylistToneID)
+        ringtoneRotation.playbackOrder = order.isEmpty ? nil : order
+    }
+
+    func advanceRingtonePlaylist(after toneID: UUID) {
+        guard ringtoneRotation.isPlayingPlaylist, let configuration = playlistConfiguration,
+              let order = ringtoneRotation.playbackOrder, order.first == toneID else { return }
+        lastPlaylistToneID = toneID
+        ringtoneRotation.playbackOrder = order.count == 1 ? configuration.cycle(after: toneID) : Array(order.dropFirst())
+    }
+
+    func ringtoneForIncomingCall(from app: CallingApp, library: RingtoneLibraryManager) -> RingtoneItem? {
+        let playlistTone = ringtoneRotation.isPlayingPlaylist ? ringtoneRotation.playbackOrder?.first : nil
+        return CallMonitorEngine.resolvedRingtone(for: app, globalID: playlistTone ?? globalRingtoneID, ringtones: library.ringtones)
+    }
 
     // Audio Settings
     @Published var masterVolume: Float = 0.9 { didSet { save() } }
@@ -192,22 +266,22 @@ final class SettingsStore: ObservableObject {
             customRingtoneID: nil,
             isCustomAdded: true
         )
-        callingApps.append(customApp)
+        configuredCallingApps.append(customApp)
     }
 
     func removeCustomApp(_ app: CallingApp) {
         guard app.isCustomAdded else { return }
-        callingApps.removeAll { $0.id == app.id }
+        configuredCallingApps.removeAll { $0.id == app.id }
     }
 
     func toggleApp(_ app: CallingApp, enabled: Bool) {
-        guard let idx = callingApps.firstIndex(where: { $0.id == app.id }) else { return }
-        callingApps[idx].isEnabled = enabled
+        guard let idx = configuredCallingApps.firstIndex(where: { $0.id == app.id }) else { return }
+        configuredCallingApps[idx].isEnabled = enabled
     }
 
     func setCustomRingtone(_ ringtoneID: UUID?, for app: CallingApp) {
-        guard let idx = callingApps.firstIndex(where: { $0.id == app.id }) else { return }
-        callingApps[idx].customRingtoneID = ringtoneID
+        guard let idx = configuredCallingApps.firstIndex(where: { $0.id == app.id }) else { return }
+        configuredCallingApps[idx].customRingtoneID = ringtoneID
     }
 
     func ensureDefaultRingtoneSelected(from library: RingtoneLibraryManager) {
@@ -293,7 +367,7 @@ final class SettingsStore: ObservableObject {
         let payload = PersistedSettings(
             globalRingtoneID: globalRingtoneID,
             ringtoneRotation: ringtoneRotation,
-            callingApps: callingApps,
+            callingApps: configuredCallingApps,
             masterVolume: masterVolume,
             globalFadeIn: globalFadeIn,
             globalFadeOut: globalFadeOut,

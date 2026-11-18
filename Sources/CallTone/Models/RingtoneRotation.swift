@@ -9,11 +9,24 @@ struct RingtoneRotation: Codable, Equatable {
 
     var mode: Mode = .single
     var toneIDs: [UUID] = []
+    var playbackOrder: [UUID]?
+
+    private enum CodingKeys: String, CodingKey {
+        case mode, toneIDs
+    }
+
+    var isPlayingPlaylist: Bool {
+        mode != .single && !toneIDs.isEmpty && playbackOrder?.isEmpty == false
+    }
 
     func available(in ringtones: [RingtoneItem]) -> Self {
         guard !toneIDs.isEmpty else { return self }
         var availableIDs = Set(ringtones.map(\.id))
-        return Self(mode: mode, toneIDs: toneIDs.filter { availableIDs.remove($0) != nil })
+        var result = self
+        result.toneIDs = toneIDs.filter { availableIDs.remove($0) != nil }
+        let selectedIDs = Set(result.toneIDs)
+        result.playbackOrder = playbackOrder?.filter { selectedIDs.contains($0) }
+        return result
     }
 
     mutating func move(_ id: UUID, by offset: Int) {
@@ -22,6 +35,7 @@ struct RingtoneRotation: Codable, Equatable {
     }
 
     func cycle(after previous: UUID?) -> [UUID] {
+        if isPlayingPlaylist, let next = playbackOrder?.first { return [next] }
         switch mode {
         case .single: return []
         case .sequential: return toneIDs

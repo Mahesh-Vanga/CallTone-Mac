@@ -106,7 +106,7 @@ struct RingtoneLibraryView: View {
 
             if settings.ringtoneRotation.mode != .single {
                 let count = settings.ringtoneRotation.available(in: library.ringtones).toneIDs.count
-                Text(count == 0 ? "Select tones to rotate between calls." : "\(count) selected")
+                Text(count == 0 ? "Select songs for the incoming-call playlist." : "\(count) selected · One song per call across apps")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

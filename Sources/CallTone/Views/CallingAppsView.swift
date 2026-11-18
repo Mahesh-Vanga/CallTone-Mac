@@ -8,12 +8,14 @@ struct CallingAppsView: View {
 
     @State private var searchText: String = ""
     @State private var inspectingApp: CallingApp?
+    @State private var appImportMessage: String?
 
     private var filteredApps: [CallingApp] {
+        let profiles = settings.callingApps.map { library.additionalCalls.displayProfile($0) }
         if searchText.trimmingCharacters(in: .whitespaces).isEmpty {
-            return settings.callingApps
+            return profiles
         }
-        return settings.callingApps.filter {
+        return profiles.filter {
             $0.name.localizedCaseInsensitiveContains(searchText) ||
             $0.bundleIdentifiers.contains { $0.localizedCaseInsensitiveContains(searchText) } ||
             $0.audioProcessNames.contains { $0.localizedCaseInsensitiveContains(searchText) }
@@ -27,21 +29,23 @@ struct CallingAppsView: View {
             Divider()
 
             List {
-                Section("Global Ringtone Default") {
+                Section("Incoming Call Ringtone") {
                     HStack {
                         Label("Global Ringtone", systemImage: "globe")
                             .font(.headline)
                         Spacer()
-                        Picker("Global Ringtone", selection: Binding(
-                            get: { settings.globalRingtoneID ?? UUID() },
-                            set: { settings.globalRingtoneID = $0 }
-                        )) {
-                            ForEach(library.ringtones) { tone in
-                                Text(tone.name).tag(tone.id)
+                        if settings.ringtoneRotation.isPlayingPlaylist {
+                            Text("\(settings.ringtoneRotation.mode.rawValue) Playlist")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Picker("Global Ringtone", selection: $settings.globalRingtoneID) {
+                                ForEach(library.ringtones) { tone in
+                                    Text(tone.name).tag(Optional(tone.id))
+                                }
                             }
+                            .labelsHidden()
+                            .frame(maxWidth: 260)
                         }
-                        .labelsHidden()
-                        .frame(maxWidth: 260)
                     }
                     .padding(.vertical, 4)
                 }
@@ -51,10 +55,26 @@ struct CallingAppsView: View {
                         appRow(app)
                     }
                 }
+                if filteredApps.contains(where: { $0.id == AdditionalCallRingtoneMonitor.meetID }) {
+                    Text("Google Meet works with an open Meet page. Native muting requires macOS to report a separate Meet audio process.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             .listStyle(.inset)
         }
         .navigationTitle("Calling Applications")
+        .onAppear {
+            library.additionalCalls.connect(settings: settings, library: library, monitor: monitor)
+        }
+        .alert("Add Calling Apps", isPresented: Binding(
+            get: { appImportMessage != nil },
+            set: { if !$0 { appImportMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { appImportMessage = nil }
+        } message: {
+            Text(appImportMessage ?? "")
+        }
         .sheet(item: $inspectingApp) { app in
             appDetailSheet(app)
         }
@@ -96,9 +116,10 @@ struct CallingAppsView: View {
     }
 
     private func appRow(_ app: CallingApp) -> some View {
-        let installStatus = settings.installStatus(for: app)
-        let callState = monitor.appStates[app.id] ?? .idle
-        let isCurrentlyRinging = monitor.activeCall?.app.id == app.id
+        let installStatus = library.additionalCalls.displayStatus(for: app, using: settings)
+        let additionalCallIsRinging = library.additionalCalls.activeAppID == app.id
+        let callState = additionalCallIsRinging ? .ringing : (monitor.appStates[app.id] ?? .idle)
+        let isCurrentlyRinging = additionalCallIsRinging || monitor.activeCall?.app.id == app.id
 
         return HStack(spacing: 14) {
             if let icon = settings.appIcon(for: app) {
@@ -127,7 +148,9 @@ struct CallingAppsView: View {
 
             // Per-app test simulation button
             Button {
-                if isCurrentlyRinging {
+                if additionalCallIsRinging {
+                    library.additionalCalls.stopRingtone()
+                } else if isCurrentlyRinging {
                     monitor.stopSimulatedOrActiveCall()
                 } else {
                     monitor.simulateIncomingCall(for: app)
@@ -144,7 +167,7 @@ struct CallingAppsView: View {
                 get: { app.customRingtoneID },
                 set: { settings.setCustomRingtone($0, for: app) }
             )) {
-                Text("Use Global Ringtone").tag(UUID?.none)
+                Text(settings.ringtoneRotation.isPlayingPlaylist ? "Use Ringtone Playlist" : "Use Global Ringtone").tag(UUID?.none)
                 Divider()
                 ForEach(library.ringtones) { tone in
                     Text(tone.name).tag(UUID?.some(tone.id))
@@ -152,11 +175,12 @@ struct CallingAppsView: View {
             }
             .labelsHidden()
             .frame(width: 180)
-            .disabled(!app.isEnabled)
+            .disabled(!app.isEnabled || settings.ringtoneRotation.isPlayingPlaylist)
+            .help("App-specific tones apply in Single mode.")
 
             Toggle("", isOn: Binding(
                 get: { app.isEnabled },
-                set: { settings.toggleApp(app, enabled: $0) }
+                set: { library.additionalCalls.setEnabled($0, for: app) }
             ))
             .toggleStyle(.switch)
             .labelsHidden()
@@ -174,6 +198,7 @@ struct CallingAppsView: View {
 
             if app.isCustomAdded {
                 Button(role: .destructive) {
+                    library.additionalCalls.setEnabled(false, for: app)
                     settings.removeCustomApp(app)
                 } label: {
                     Image(systemName: "trash")
@@ -234,14 +259,15 @@ struct CallingAppsView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                statusBadge(installStatus: settings.installStatus(for: app), callState: monitor.appStates[app.id] ?? .idle)
+                statusBadge(installStatus: library.additionalCalls.displayStatus(for: app, using: settings),
+                            callState: library.additionalCalls.activeAppID == app.id ? .ringing : (monitor.appStates[app.id] ?? .idle))
             }
 
             Divider()
 
             GroupBox("Bundle Identifiers") {
                 VStack(alignment: .leading, spacing: 4) {
-                    ForEach(app.bundleIdentifiers, id: \.self) { bid in
+                    ForEach(app.id == AdditionalCallRingtoneMonitor.meetID ? [AdditionalCallRingtoneMonitor.meetAppBundleID] : app.bundleIdentifiers, id: \.self) { bid in
                         Text("• \(bid)")
                             .font(.system(.caption, design: .monospaced))
                     }
@@ -287,12 +313,27 @@ struct CallingAppsView: View {
 
     private func addCustomAppPanel() {
         let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = false
+        panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         panel.allowedContentTypes = [.application]
         panel.directoryURL = URL(fileURLWithPath: "/Applications")
-        if panel.runModal() == .OK, let url = panel.url {
-            settings.addCustomApp(from: url)
+        if panel.runModal() == .OK {
+            var skipped: [String] = []
+            for url in panel.urls {
+                let knownIDs = Set(settings.callingApps.map(\.id))
+                if Bundle(url: url)?.bundleIdentifier != Bundle.main.bundleIdentifier {
+                    settings.addCustomApp(from: url)
+                }
+                if let added = settings.callingApps.first(where: { !knownIDs.contains($0.id) }) {
+                    library.additionalCalls.setEnabled(true, for: added)
+                } else {
+                    skipped.append(url.deletingPathExtension().lastPathComponent)
+                }
+            }
+            settings.refreshInstalledAppCache()
+            if !skipped.isEmpty {
+                appImportMessage = "Already listed or missing an application identity: \(skipped.joined(separator: ", "))."
+            }
         }
     }
 }

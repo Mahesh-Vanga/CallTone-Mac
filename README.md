@@ -2,7 +2,7 @@
 
 <img src="Resources/Logo.png" alt="CallTone Mac logo" width="112">
 
-Set custom ringtones for incoming calls on your Mac. Use a single global tone, rotate through a selection, or assign a different tone to FaceTime, WhatsApp, and other calling apps. CallTone Mac is a native Swift and SwiftUI app that processes call signals and audio on your Mac.
+Replace incoming-call ringtones on your Mac. Pick a single tone or share a sequential or shuffled playlist across iPhone calls, FaceTime, WhatsApp, and supported calling apps. Use **Calling Applications** to enable a profile or add an installed app. Call detection and ringtone playback stay on your Mac.
 
 **Apple Silicon · macOS 14.2 or later · MIT license**
 
@@ -49,7 +49,7 @@ Read the welcome screen and select **Agree and Continue**. To change permissions
 
 | Permission | What CallTone Mac uses it for |
 | --- | --- |
-| Accessibility | Detects Apple's Answer and Decline controls for faster iPhone Continuity and FaceTime call detection. Without it, audio-based detection may respond later. |
+| Accessibility | Detects incoming-call controls for faster iPhone Continuity and FaceTime call detection. Additional calling apps require Accessibility for call detection. |
 | System Audio Recording | Lets Core Audio Process Taps mute the original ringtone while the replacement plays. The taps do not save recordings. |
 | Notifications (optional) | Shows a local notification when a custom ringtone starts if you enable it in General Settings. |
 | Screen Recording, where needed | Some third-party detection paths depend on visibility into the calling app's windows. **Allow Audio Stream Fallback for 3rd-Party Calling Apps** in Audio Settings can help when window information is unavailable. |
@@ -68,7 +68,7 @@ Start or pause monitoring, see the active call and recent detection activity, ch
 
 Select **Import Audio** or drag files into the library. Supported imports include MP3, WAV, M4A, M4R, CAF, AAC, AIFF, and FLAC. Play a tone to preview it, then select **Set Global** or use **Assign to Calling App** in its menu. **Built-in Tones** restores the five included tones. The row menu also offers duplicate, rename, M4A clip export, and **Reveal in Finder**.
 
-Set **Incoming Call Ringtone** to **Sequential** or **Shuffle**, then check the tones to include. Sequential starts in selection order. Use **Move Earlier in Sequence** and **Move Later in Sequence** in a tone’s menu to change its position. Shuffle plays each selected tone once per cycle and avoids immediate repeats when multiple tones are selected. Each call uses one tone. Per-app assignments take priority, and an empty rotation uses the single global tone. **Simulate Call** advances the rotation too.
+Set **Incoming Call Ringtone** to **Sequential** or **Shuffle**, then check the songs to include. Sequential starts in selection order. Use **Move Earlier in Sequence** and **Move Later in Sequence** in a song’s menu to change its position. Shuffle plays each selected song once per cycle and avoids immediate repeats when multiple songs are selected. The playlist advances once per call across monitored apps, including Phone, FaceTime, and WhatsApp. **Single** uses saved app-specific tones or the global default. An empty playlist uses the same single-tone rules. **Simulate Call** advances the playlist too.
 
 ![Ringtone Library with five built-in tones](docs/demo/library.png)
 
@@ -80,7 +80,9 @@ Select **Trim & Edit** beside a tone. Drag the waveform handles or adjust **Star
 
 ### Calling Applications
 
-The built-in profiles include Apple Phone (iPhone Continuity), FaceTime, WhatsApp, Telegram, Signal, Zoom, Microsoft Teams, Google Meet, and Discord. Search by app name, bundle identifier, or process name. Each row lets you enable monitoring, select a tone or **Use Global Ringtone**, run a **Test**, and inspect the app profile. **Add Custom App** adds a local macOS app bundle. Detection depends on the calling app's window and audio behavior.
+The built-in profiles include Apple Phone (iPhone Continuity), FaceTime, WhatsApp, Telegram, Signal, Zoom, Microsoft Teams, Google Meet, and Discord. Search by app name, bundle identifier, or process name. Each row lets you enable monitoring, select a tone or **Use Global Ringtone**, run a **Test**, and inspect the app profile. **Add Custom App** accepts one or more installed macOS apps.
+
+Telegram, Signal, Zoom, Microsoft Teams, Google Meet, Discord, and custom apps use Accessibility to recognize incoming-call controls. CallTone plays the assigned ringtone or shared playlist and attempts to mute audio attributable to the ringing app until its incoming-call controls disappear. Custom apps need to expose recognizable Answer and Decline controls. For Google Meet, open Meet in a browser or its installed web app. Native muting requires a Meet-specific audio process. Audio from a shared browser process stays audible.
 
 ![Calling Applications and per-app ringtone assignments](docs/demo/calling-applications.png)
 
@@ -123,7 +125,7 @@ Use the menu bar icon to reopen the window, pause or resume monitoring, switch t
 | The custom ringtone is silent | Preview it in **Ringtone Library**, then run **Test Audio Output**. Check master volume, output routing, the calling app's assigned tone, and whether monitoring is active. |
 | Both ringtones play | In **Audio Settings**, run **Verify Tap Permission** and check System Audio Recording access in macOS settings. CallTone automatically attempts to mute the original ringtone for monitored calls. |
 | An Apple call rings late or is missed | Check Accessibility access, confirm the Apple Phone or FaceTime profile is enabled, and review the Dashboard's recent activity. |
-| A third-party call is missed | Enable the corresponding app profile, verify its tone with **Test**, and check the audio fallback setting. A successful test confirms playback. Use a real call to check detection. |
+| A third-party call is missed | Enable the corresponding app profile and grant Accessibility. Use **Test** to check playback, then place a real call to check detection. |
 | Permissions changed after an upgrade | Confirm you opened the copy in Applications and review its permissions in **General Settings → macOS Permissions**. |
 
 ## How it works

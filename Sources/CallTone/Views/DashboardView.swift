@@ -22,7 +22,7 @@ struct DashboardView: View {
     }
 
     private var enabledApps: [CallingApp] {
-        settings.callingApps.filter { $0.isEnabled }
+        settings.callingApps.map { library.additionalCalls.displayProfile($0) }.filter(\.isEnabled)
     }
 
     var body: some View {
@@ -36,6 +36,15 @@ struct DashboardView: View {
 
                 if let active = monitor.activeCall {
                     activeCallBanner(active)
+                } else if let appID = library.additionalCalls.activeAppID,
+                          let app = settings.callingApps.first(where: { $0.id == appID }) {
+                    HStack {
+                        Label("Incoming Call: \(app.name)", systemImage: "phone.arrow.down.left.fill")
+                        Spacer()
+                        Button("Stop Ringtone") { library.additionalCalls.stopRingtone() }
+                    }
+                    .padding(16)
+                    .background(Color.green.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
                 }
 
                 metricsBar
@@ -54,6 +63,9 @@ struct DashboardView: View {
             .padding(24)
         }
         .navigationTitle("Dashboard")
+        .onAppear {
+            library.additionalCalls.connect(settings: settings, library: library, monitor: monitor)
+        }
     }
 
     private var permissionAttentionBanner: some View {
@@ -359,7 +371,7 @@ struct DashboardView: View {
                 LazyVGrid(columns: [
                     GridItem(.adaptive(minimum: 200), spacing: 10)
                 ], spacing: 10) {
-                    ForEach(settings.callingApps) { app in
+                    ForEach(settings.callingApps.map { library.additionalCalls.displayProfile($0) }) { app in
                         HStack(spacing: 10) {
                             if let nsImage = settings.appIcon(for: app) {
                                 Image(nsImage: nsImage)
@@ -375,7 +387,7 @@ struct DashboardView: View {
                                 Text(app.name)
                                     .font(.subheadline.weight(.medium))
                                     .lineLimit(1)
-                                Text(app.customRingtoneID != nil ? "Custom Tone" : "Global Tone")
+                                Text(settings.ringtoneRotation.isPlayingPlaylist ? "Playlist" : (app.customRingtoneID != nil ? "Custom Tone" : "Global Tone"))
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                             }

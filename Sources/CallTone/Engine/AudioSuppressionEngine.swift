@@ -1,6 +1,8 @@
 import Foundation
 import CoreAudio
 import AudioToolbox
+import os
+import OSLog
 
 struct AudioProcessInfo: Identifiable, Hashable {
     let id: AudioObjectID // Core Audio process object ID
@@ -33,7 +35,25 @@ final class AudioSuppressionEngine: ObservableObject {
     private var activeProcessIDs: Set<AudioObjectID> = []
     private var activeTapUUID: UUID?
     private var retryAfter: TimeInterval = 0
+    private var isRearmSuppression = false
     private let ioQueue = DispatchQueue(label: "com.calltone.audio.tap", qos: .userInteractive)
+    private let ringSignal = OSAllocatedUnfairLock(initialState: RingSignal())
+    private let logger = Logger(subsystem: "com.calltone.macos", category: "CallDetection")
+
+    struct RingSignal {
+        private var lastBuffer: TimeInterval?
+        private var lastAudibleBuffer: TimeInterval?
+
+        mutating func observe(audible: Bool, at time: TimeInterval) {
+            lastBuffer = time
+            if audible { lastAudibleBuffer = time }
+        }
+
+        var isQuiet: Bool {
+            guard let lastBuffer, let lastAudibleBuffer else { return false }
+            return lastBuffer - lastAudibleBuffer >= 0.06
+        }
+    }
     deinit {
         // Ensure cleanup even on deinit
         if activeAggregateDeviceID != kAudioObjectUnknown {
@@ -173,13 +193,45 @@ final class AudioSuppressionEngine: ObservableObject {
     // MARK: - Suppression Control
 
     func suppressRinging(targetApp: CallingApp, additionalApps: [CallingApp], processes: [AudioProcessInfo]) {
+        if isRearmSuppression {
+            isRearmSuppression = false
+            retryAfter = 0
+            ringSignal.withLock { $0 = RingSignal() }
+        }
+        let matching = Self.ringtoneProcesses(targetApp: targetApp, additionalApps: additionalApps, processes: processes)
+        suppress(targetApp: targetApp, matching: matching)
+    }
+
+    func suppressAppleRingtoneDuringRearm(for app: CallingApp?, processes: [AudioProcessInfo]) {
+        guard let app, let renderer = Self.appleRingtoneRenderer(for: app, in: processes) else {
+            if isRearmSuppression { stopSuppressing() }
+            return
+        }
+
+        let alreadyMuted = isRearmSuppression && activeProcessIDs.contains(renderer.id)
+        isRearmSuppression = true
+        suppress(targetApp: app, matching: [renderer])
+        if !alreadyMuted, activeProcessIDs.contains(renderer.id) {
+            logger.notice("Native Apple ringtone muted while waiting to rearm")
+        }
+    }
+
+    nonisolated static func appleRingtoneRenderer(for app: CallingApp, in processes: [AudioProcessInfo]) -> AudioProcessInfo? {
+        let candidates = ringtoneProcesses(targetApp: app, additionalApps: [], processes: processes)
+        guard !candidates.contains(where: \.isRunningInput) else { return nil }
+        // Use the dedicated call UI renderer here. The normal tap also covers shared system and call-audio processes.
+        return candidates.first {
+            $0.bundleID == "com.apple.InCallService" || $0.processName == "MacInCallService"
+        }
+    }
+
+    private func suppress(targetApp: CallingApp, matching matchingObjects: [AudioProcessInfo]) {
         guard #available(macOS 14.2, *) else {
             permissionStatus = .unsupportedOS
             lastErrorMessage = "Core Audio Process Tap suppression requires macOS 14.2 or later."
             return
         }
 
-        let matchingObjects = Self.ringtoneProcesses(targetApp: targetApp, additionalApps: additionalApps, processes: processes)
         guard !matchingObjects.isEmpty else { return }
         let objectIDs = Set(matchingObjects.map(\.id))
         guard objectIDs != activeProcessIDs, ProcessInfo.processInfo.systemUptime >= retryAfter else { return }
@@ -202,7 +254,7 @@ final class AudioSuppressionEngine: ObservableObject {
                 lastErrorMessage = "Could not update ringtone muting (OSStatus \(status))."
                 return
             }
-        } else if !startTap(tapDescription, name: targetApp.name) {
+        } else if !startTap(tapDescription, app: targetApp) {
             return
         }
 
@@ -237,8 +289,14 @@ final class AudioSuppressionEngine: ObservableObject {
         }
     }
 
+    func isAppleRingQuiet(targetApp: CallingApp, processes: [AudioProcessInfo]) -> Bool {
+        guard ringSignal.withLock({ $0.isQuiet }) else { return false }
+        let appleIDs = Set(Self.ringtoneProcesses(targetApp: targetApp, additionalApps: [], processes: processes).map(\.id))
+        return !processes.contains { $0.isRunningOutput && activeProcessIDs.contains($0.id) && !appleIDs.contains($0.id) }
+    }
+
     @available(macOS 14.2, *)
-    private func startTap(_ tapDescription: CATapDescription, name: String) -> Bool {
+    private func startTap(_ tapDescription: CATapDescription, app: CallingApp) -> Bool {
         var tapID = AudioObjectID(kAudioObjectUnknown)
         let tapStatus = AudioHardwareCreateProcessTap(tapDescription, &tapID)
         guard tapStatus == noErr, tapID != kAudioObjectUnknown else {
@@ -249,7 +307,7 @@ final class AudioSuppressionEngine: ObservableObject {
         let tapUUIDString = tapDescription.uuid.uuidString
         let aggregateUID = "com.calltone.aggregate.\(UUID().uuidString)"
         let aggregateDict: [String: Any] = [
-            kAudioAggregateDeviceNameKey: "CallTone Mac-Tap-\(name)",
+            kAudioAggregateDeviceNameKey: "CallTone Mac-Tap-\(app.name)",
             kAudioAggregateDeviceUIDKey: aggregateUID,
             kAudioAggregateDeviceIsPrivateKey: true,
             kAudioAggregateDeviceTapAutoStartKey: true,
@@ -269,8 +327,29 @@ final class AudioSuppressionEngine: ObservableObject {
             return false
         }
 
+        var format = AudioStreamBasicDescription()
+        var formatSize = UInt32(MemoryLayout.size(ofValue: format))
+        var formatAddress = AudioObjectPropertyAddress(mSelector: kAudioTapPropertyFormat,
+            mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        let meterEnabled = (app.isContinuityPhone || app.id == "com.apple.FaceTime")
+            && AudioObjectGetPropertyData(tapID, &formatAddress, 0, nil, &formatSize, &format) == noErr
+            && format.mFormatID == kAudioFormatLinearPCM && format.mBitsPerChannel == 32
+            && format.mFormatFlags & (kAudioFormatFlagIsFloat | kAudioFormatFlagIsBigEndian) == kAudioFormatFlagIsFloat
+        let signal = ringSignal
         var ioProcID: AudioDeviceIOProcID?
-        let ioStatus = AudioDeviceCreateIOProcIDWithBlock(&ioProcID, aggregateID, ioQueue) { _, _, _, _, _ in }
+        let ioStatus = AudioDeviceCreateIOProcIDWithBlock(&ioProcID, aggregateID, ioQueue) { _, input, _, _, _ in
+            guard meterEnabled else { return }
+            let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input))
+            // Keep timestamps only. A silent or unreadable tap must not suppress all ringing.
+            let audible = buffers.contains { buffer in
+                guard let data = buffer.mData else { return false }
+                let samples = UnsafeBufferPointer(start: data.assumingMemoryBound(to: Float.self),
+                    count: Int(buffer.mDataByteSize) / MemoryLayout<Float>.stride)
+                return samples.contains { abs($0) > 0.001 }
+            }
+            let time = ProcessInfo.processInfo.systemUptime
+            _ = signal.withLockIfAvailable { $0.observe(audible: audible, at: time) }
+        }
 
         guard ioStatus == noErr, let createdIOProc = ioProcID else {
             AudioHardwareDestroyAggregateDevice(aggregateID)
@@ -317,6 +396,8 @@ final class AudioSuppressionEngine: ObservableObject {
         activeTapUUID = nil
         activeProcessIDs.removeAll()
         retryAfter = 0
+        isRearmSuppression = false
+        ringSignal.withLock { $0 = RingSignal() }
         isSuppressing = false
         suppressedBundleIDs = []
     }

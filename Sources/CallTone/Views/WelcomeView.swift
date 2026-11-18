@@ -59,7 +59,8 @@ struct WelcomeView: View {
                             .accessibilityHidden(true)
                         Text("Welcome to CallTone Mac").font(.largeTitle.bold())
                     }
-                    Text("CallTone Mac detects incoming calls and plays the ringtone you choose. When enabled, it temporarily mutes the calling app’s original ringtone. Call detection, audio processing, and ringtone storage stay on your Mac.")
+                    Text("Choose your own ringtone for calls on your Mac. Use a single ringtone or play a shared playlist in order or on shuffle.")
+                    Text("Open Calling Applications to enable an app or add one from Applications. CallTone Mac can mute the original ringtone when macOS can identify the app’s audio. Call detection, audio processing, and ringtone storage stay on your Mac.")
                     GroupBox("macOS permissions") {
                         VStack(alignment: .leading, spacing: 12) {
                             LabeledContent {
@@ -70,7 +71,7 @@ struct WelcomeView: View {
                                 }
                                 .disabled(accessibilityGranted)
                             } label: {
-                                permissionDescription("Accessibility", "Reads Apple’s call controls to detect when a call starts or stops ringing. Other signals are used if access is unavailable.")
+                                permissionDescription("Accessibility", "Reads incoming-call controls to detect when ringing starts and stops. Required for the additional calling apps.")
                             }
                             Divider()
                             LabeledContent {
