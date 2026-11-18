@@ -6,17 +6,21 @@ Set custom ringtones for incoming calls on your Mac. Choose one global tone or a
 
 **Apple Silicon · macOS 14.2 or later · MIT license**
 
-[Download CallTone Mac 1.0.0](https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.0/CallTone-Mac-1.0.0.zip) · [All releases](https://github.com/Mahesh-Vanga/CallTone-Mac/releases) · [Report an issue](https://github.com/Mahesh-Vanga/CallTone-Mac/issues)
+[Download CallTone Mac 1.0.0 (DMG)](https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.0/CallTone-Mac-1.0.0.dmg) · [All releases](https://github.com/Mahesh-Vanga/CallTone-Mac/releases) · [Report an issue](https://github.com/Mahesh-Vanga/CallTone-Mac/issues)
 
 [Install](#install) · [First launch and permissions](#first-launch-and-permissions) · [App walkthrough](#app-walkthrough) · [Troubleshooting](#troubleshooting) · [Build from source](#build-from-source)
 
 ## Install
 
-1. Download **CallTone-Mac-1.0.0.zip** from the release assets. GitHub also lists source archives for developers.
-2. Double-click the ZIP, then drag **CallTone Mac.app** to **Applications**.
-3. Open CallTone Mac from Applications and follow the welcome screen. macOS may ask you to confirm the first launch.
+Choose one of the three Apple-notarized downloads for Apple Silicon Macs.
 
-The public ZIP contains a Developer ID-signed app with an Apple notarization ticket. Intel Macs are outside the supported architecture. The current release offers the ZIP. The source build can also produce a DMG and PKG.
+| Download | How to install |
+| --- | --- |
+| [DMG](https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.0/CallTone-Mac-1.0.0.dmg) | Open the disk image and drag **CallTone Mac** to **Applications**. |
+| [PKG](https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.0/CallTone-Mac-1.0.0.pkg) | Open the package and follow the macOS Installer prompts. |
+| [ZIP](https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.0/CallTone-Mac-1.0.0.zip) | Double-click the ZIP and move **CallTone Mac.app** to **Applications**. |
+
+Open CallTone Mac from **Applications** and follow the welcome screen. macOS may ask you to confirm the first launch. GitHub also lists source archives for developers.
 
 ### Download and verify in Terminal
 
@@ -113,7 +117,7 @@ Use the menu bar icon to reopen the window, pause or resume monitoring, switch t
 
 | Symptom | What to check |
 | --- | --- |
-| macOS flags the download | Confirm you downloaded the ZIP from GitHub Releases and run the signature and Gatekeeper checks above. A normal first-open confirmation can still appear. |
+| macOS flags the download | Confirm you downloaded an installer from the release assets. Use the ZIP verification commands above or the DMG and PKG checks below. A normal first-open confirmation can still appear. |
 | The custom ringtone is silent | Preview it in **Ringtone Library**, then run **Test Audio Output**. Check master volume, output routing, the calling app's assigned tone, and whether monitoring is active. |
 | Both ringtones play | In **Audio Settings**, enable **Mute Original App Ringtone During Incoming Calls** and run **Verify Tap Permission**. Check System Audio Recording access in macOS settings. |
 | An Apple call rings late or is missed | Check Accessibility access, confirm the Apple Phone or FaceTime profile is enabled, and review the Dashboard's recent activity. |
