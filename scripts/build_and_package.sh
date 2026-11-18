@@ -23,13 +23,7 @@ echo "==> Building $APP_NAME ($VERSION) for Apple Silicon (arm64)..."
 cd "$ROOT_DIR"
 swift build --disable-sandbox -c release --arch arm64
 
-BIN_PATH="$ROOT_DIR/.build/out/Products/Release/$BUILD_PRODUCT"
-if [ ! -f "$BIN_PATH" ]; then
-    BIN_PATH="$ROOT_DIR/.build/arm64-apple-macosx/release/$BUILD_PRODUCT"
-fi
-if [ ! -f "$BIN_PATH" ]; then
-    BIN_PATH="$ROOT_DIR/.build/release/$BUILD_PRODUCT"
-fi
+BIN_PATH="$(swift build --disable-sandbox -c release --arch arm64 --show-bin-path)/$BUILD_PRODUCT"
 
 echo "==> Assembling $APP_BUNDLE..."
 rm -rf "$APP_BUNDLE" "$DMG_PATH" "$PKG_PATH" "$COMPONENT_PKG"
@@ -78,6 +72,9 @@ fi
 echo "==> Creating DMG ($DMG_PATH)..."
 "$DMGBUILD" -s "$ROOT_DIR/scripts/dmg_settings.py" -D "app=$APP_BUNDLE" \
     -D "background=$ROOT_DIR/Resources/DMGBackground.png" "$APP_NAME" "$DMG_PATH"
+if [ "$SIGNING_IDENTITY" != "-" ]; then
+    codesign --sign "$SIGNING_IDENTITY" --timestamp "$DMG_PATH"
+fi
 
 echo "==> Creating PKG ($PKG_PATH)..."
 PKG_ROOT="$DIST_DIR/pkg-root"

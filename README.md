@@ -49,7 +49,7 @@ See the [privacy policy](PRIVACY.md) for details. CallTone Mac uses macOS Access
 
 ## Install
 
-CallTone Mac is distributed through GitHub Releases. Download either installer from [GitHub Releases](https://github.com/Mahesh-Vanga/CallTone-Mac/releases). Open the DMG and drag CallTone Mac to Applications, or open the PKG to run the macOS installer. The default build uses an ad-hoc app signature and an unsigned PKG. macOS Gatekeeper may block these artifacts. If upgrading from the earlier CallTone build, quit it and remove the old app bundle so macOS only has one copy. Your settings and ringtone library are stored separately.
+Download the notarized `CallTone-Mac-1.0.0.zip` from [GitHub Releases](https://github.com/Mahesh-Vanga/CallTone-Mac/releases). Unzip it, move CallTone Mac to Applications, and open it. macOS may ask you to confirm the first launch. If upgrading from the earlier CallTone build, quit it and remove the old app bundle so macOS only has one copy. Your settings and ringtone library are stored separately.
 
 ## Build & Package
 
@@ -68,7 +68,7 @@ This compiles for Apple Silicon (`arm64`), generates native multi-resolution ico
 
 ### Signing & Notarization (Optional)
 
-If an Apple Developer certificate is present in Keychain, `build_and_package.sh` automatically signs the app. To notarize with Apple:
+For a public release, use the Developer ID Application and Installer identities from Keychain and a notarization profile created with `xcrun notarytool store-credentials`. The script signs the app and DMG with the Application identity, signs the PKG with the Installer identity, and submits and staples both installers:
 
 ```bash
 SIGNING_IDENTITY="Developer ID Application: …" \
@@ -97,6 +97,6 @@ Open **Ringtone Library**, choose a built-in tone or select **Import Audio**, th
 
 Open **Settings → Updates → Check for Updates** to refresh the public GitHub release feed in one click. Enable **Check for Updates Automatically** to check when CallTone Mac opens or becomes active. Automatic checks are off by default and run at most once a day while the app stays open. A newer stable release opens an in-app alert with a link to GitHub.
 
-The release repository is configured by `CallToneUpdateRepository` in `Resources/Info.plist`. For each update, increase `CFBundleShortVersionString`, run the packaging script, and publish a matching stable tag such as `v1.0.1` with the DMG and PKG. GitHub also generates source archives for tagged releases.
+The release repository is configured by `CallToneUpdateRepository` in `Resources/Info.plist`. For each update, increase `CFBundleShortVersionString` and publish a matching stable tag such as `v1.0.1` with the notarized download. GitHub also generates source archives for tagged releases.
 
 Run `swift test` on macOS to verify the package.
