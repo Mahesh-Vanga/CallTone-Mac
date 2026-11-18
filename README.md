@@ -6,7 +6,7 @@ Replace incoming-call ringtones on your Mac. Pick a single tone or share a seque
 
 **Apple Silicon · macOS 14.2 or later · MIT license**
 
-[Download CallTone Mac 1.0.1 (DMG)](https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.1/CallTone-Mac-1.0.1.dmg) · [All releases](https://github.com/Mahesh-Vanga/CallTone-Mac/releases) · [Report an issue](https://github.com/Mahesh-Vanga/CallTone-Mac/issues)
+[Download CallTone Mac 1.0.2 (DMG)](https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.2/CallTone-Mac-1.0.2.dmg) · [All releases](https://github.com/Mahesh-Vanga/CallTone-Mac/releases) · [Report an issue](https://github.com/Mahesh-Vanga/CallTone-Mac/issues)
 
 [Install](#install) · [First launch and permissions](#first-launch-and-permissions) · [App walkthrough](#app-walkthrough) · [Troubleshooting](#troubleshooting) · [Build from source](#build-from-source)
 
@@ -16,11 +16,11 @@ Choose one of the three Apple-notarized downloads for Apple Silicon Macs.
 
 | Download | How to install |
 | --- | --- |
-| [DMG](https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.1/CallTone-Mac-1.0.1.dmg) | Open the disk image and drag **CallTone Mac** to **Applications**. |
-| [PKG](https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.1/CallTone-Mac-1.0.1.pkg) | Open the package and follow the macOS Installer prompts. |
-| [ZIP](https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.1/CallTone-Mac-1.0.1.zip) | Double-click the ZIP and move **CallTone Mac.app** to **Applications**. |
+| [DMG](https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.2/CallTone-Mac-1.0.2.dmg) | Open the disk image and drag **CallTone Mac** to **Applications**. |
+| [PKG](https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.2/CallTone-Mac-1.0.2.pkg) | Open the package and follow the macOS Installer prompts. |
+| [ZIP](https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.2/CallTone-Mac-1.0.2.zip) | Double-click the ZIP and move **CallTone Mac.app** to **Applications**. |
 
-Open CallTone Mac from **Applications** and follow the welcome screen. macOS may ask you to confirm the first launch. GitHub also lists source archives for developers.
+Open CallTone Mac from **Applications** to start it in the menu bar. Choose **Open CallTone Mac** from the menu bar, or open the app again from Applications, to show its window. On a new install, this opens the welcome screen. macOS may ask you to confirm the first launch.
 
 ### Download and verify in Terminal
 
@@ -32,8 +32,8 @@ download_dir="$(mktemp -d)"
   set -e
   cd "$download_dir"
   curl --fail --location --remote-name \
-    https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.1/CallTone-Mac-1.0.1.zip
-  ditto -x -k CallTone-Mac-1.0.1.zip .
+    https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.2/CallTone-Mac-1.0.2.zip
+  ditto -x -k CallTone-Mac-1.0.2.zip .
   codesign --verify --deep --strict "CallTone Mac.app"
   xcrun stapler validate "CallTone Mac.app"
   spctl --assess --type execute --verbose=2 "CallTone Mac.app"
@@ -45,7 +45,7 @@ A successful Gatekeeper assessment reports `accepted` and `source=Notarized Deve
 
 ## First launch and permissions
 
-Read the welcome screen and select **Agree and Continue**. To change permissions later, use **General Settings → macOS Permissions** or **System Settings**. To start manually, open the **Dashboard** and select **Start Monitoring**.
+Read the welcome screen and select **Agree and Continue**. CallTone remembers your setup across updates. To change permissions later, use **General Settings → macOS Permissions** or **System Settings**. To start manually, open the **Dashboard** and select **Start Monitoring**.
 
 | Permission | What CallTone Mac uses it for |
 | --- | --- |
@@ -88,7 +88,7 @@ Telegram, Signal, Zoom, Microsoft Teams, Google Meet, Discord, and custom apps u
 
 ### Audio Settings
 
-Set master volume, global fade and loop overrides, and the output device. Use **Test Audio Output** to confirm the selected route or **Refresh Audio Devices** after connecting hardware. This page also controls third-party audio fallback, original ringtone suppression, and the scope of muting. Use **Verify Tap Permission** to check whether suppression is available.
+Set master volume, global fade and loop overrides, and the output device. Use **Test Audio Output** to confirm the selected route or **Refresh Audio Devices** after connecting hardware. Use **Open System Audio Recording Settings** to review the macOS permission for ringtone muting.
 
 ![Audio Settings for playback, routing, fallback, and suppression](docs/demo/audio-settings.png)
 
@@ -96,13 +96,15 @@ Set master volume, global fade and loop overrides, and the output device. Use **
 
 Configure update checks, launch at login, automatic monitoring, the menu bar icon, notifications, and the System, Light, or Dark appearance. The same page provides macOS permission controls, a link to the privacy policy, access to the local library folder, and app version and license information.
 
+Turn on **Launch CallTone Mac at Login** for a menu bar start with the window closed. To check local alerts, turn on notifications and select **Send Test Notification**.
+
 ![General Settings for updates, background operation, appearance, and permissions](docs/demo/general-settings.png)
 
 ![Privacy, storage, and app information in General Settings](docs/demo/general-settings-about.png)
 
 ### Menu bar and keyboard shortcuts
 
-Use the menu bar icon to reopen the window, pause or resume monitoring, switch the global tone, stop a ringtone or preview, or quit CallTone Mac.
+Use the menu bar icon to reopen the window, pause or resume monitoring, switch the global tone, stop a ringtone or preview, or choose **Quit CallTone Mac**. CallTone runs as a menu bar app and stays out of the Dock and Force Quit Applications list.
 
 | Shortcut | Action |
 | --- | --- |
@@ -123,7 +125,7 @@ Use the menu bar icon to reopen the window, pause or resume monitoring, switch t
 | --- | --- |
 | macOS flags the download | Confirm you downloaded an installer from the release assets. Use the ZIP verification commands above or the DMG and PKG checks below. A normal first-open confirmation can still appear. |
 | The custom ringtone is silent | Preview it in **Ringtone Library**, then run **Test Audio Output**. Check master volume, output routing, the calling app's assigned tone, and whether monitoring is active. |
-| Both ringtones play | In **Audio Settings**, run **Verify Tap Permission** and check System Audio Recording access in macOS settings. CallTone automatically attempts to mute the original ringtone for monitored calls. |
+| Both ringtones play | In **Audio Settings**, open **System Audio Recording Settings** and confirm CallTone Mac has access. CallTone automatically attempts to mute the original ringtone for monitored calls. |
 | An Apple call rings late or is missed | Check Accessibility access, confirm the Apple Phone or FaceTime profile is enabled, and review the Dashboard's recent activity. |
 | A third-party call is missed | Enable the corresponding app profile and grant Accessibility. Use **Test** to check playback, then place a real call to check detection. |
 | Permissions changed after an upgrade | Confirm you opened the copy in Applications and review its permissions in **General Settings → macOS Permissions**. |
@@ -171,13 +173,13 @@ Check submission status and verify both distributable files. Replace the version
 
 ```bash
 xcrun notarytool history --keychain-profile CallToneNotary
-xcrun stapler validate dist/CallTone-Mac-1.0.1.dmg
-xcrun stapler validate dist/CallTone-Mac-1.0.1.pkg
-spctl --assess --type open --context context:primary-signature --verbose=2 dist/CallTone-Mac-1.0.1.dmg
-spctl --assess --type install --verbose=2 dist/CallTone-Mac-1.0.1.pkg
+xcrun stapler validate dist/CallTone-Mac-1.0.2.dmg
+xcrun stapler validate dist/CallTone-Mac-1.0.2.pkg
+spctl --assess --type open --context context:primary-signature --verbose=2 dist/CallTone-Mac-1.0.2.dmg
+spctl --assess --type install --verbose=2 dist/CallTone-Mac-1.0.2.pkg
 ```
 
-When publishing a new version, update the version fields in [Info.plist](Resources/Info.plist) and publish a matching stable GitHub tag, such as `v1.0.1`, with the verified download. The app reads its update repository from `CallToneUpdateRepository` in that plist.
+When publishing a new version, update the version fields in [Info.plist](Resources/Info.plist) and publish a matching stable GitHub tag, such as `v1.0.2`, with the verified download. The app reads its update repository from `CallToneUpdateRepository` in that plist.
 
 ## Project layout and contributions
 

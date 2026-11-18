@@ -4,20 +4,23 @@ import CoreGraphics
 @testable import CallTone
 
 final class CallToneTests: XCTestCase {
-    func testWelcomeConsentAppliesOnlyToAcceptedBuild() throws {
+    func testWelcomeConsentPersistsAcrossLaunchesAndMigratesAcceptedBuilds() throws {
         let suite = "CallToneTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        let first = WelcomeConsent(version: "1.0.0+1", defaults: defaults)
-        let update = WelcomeConsent(version: "1.0.0+2", defaults: defaults)
+        let first = WelcomeConsent(bundle: .main, defaults: defaults)
 
         XCTAssertFalse(first.isAccepted)
         first.accept()
-        XCTAssertTrue(WelcomeConsent(version: "1.0.0+1", defaults: defaults).isAccepted)
-        XCTAssertFalse(update.isAccepted)
-        update.accept()
-        XCTAssertTrue(update.isAccepted)
-        XCTAssertFalse(first.isAccepted)
+        XCTAssertTrue(WelcomeConsent(bundle: .main, defaults: defaults).isAccepted)
+
+        defaults.removePersistentDomain(forName: suite)
+        defaults.set("invalid", forKey: "AcceptedWelcomeVersion")
+        XCTAssertFalse(WelcomeConsent(bundle: .main, defaults: defaults).isAccepted)
+        defaults.set("1.0.0+1", forKey: "AcceptedWelcomeVersion")
+        XCTAssertTrue(WelcomeConsent(bundle: .main, defaults: defaults).isAccepted)
+        defaults.removeObject(forKey: "AcceptedWelcomeVersion")
+        XCTAssertTrue(WelcomeConsent(bundle: .main, defaults: defaults).isAccepted)
     }
 
     func testRingtoneItemEffectiveDurationAndFormatting() {

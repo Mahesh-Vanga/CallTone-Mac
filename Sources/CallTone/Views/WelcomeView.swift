@@ -3,25 +3,24 @@ import ApplicationServices
 import UserNotifications
 
 struct WelcomeConsent {
-    private static let key = "AcceptedWelcomeVersion"
-    let version: String
-    let defaults: UserDefaults
+    private static let key = "AcceptedWelcomePolicy"
+    private static let policyVersion = 1
+    private let defaults: UserDefaults
 
-    init(version: String, defaults: UserDefaults) {
-        self.version = version
+    init(bundle _: Bundle, defaults: UserDefaults) {
         self.defaults = defaults
+        if Self.policyVersion == 1, defaults.object(forKey: Self.key) == nil,
+           let previousConsent = defaults.string(forKey: "AcceptedWelcomeVersion"),
+           previousConsent.range(of: #"^(\d+(\.\d+)*|development)\+\d+(\.\d+)*$"#,
+                                 options: .regularExpression) != nil {
+            accept()
+        }
     }
 
-    init(bundle: Bundle, defaults: UserDefaults) {
-        let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development"
-        let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
-        self.init(version: "\(version)+\(build)", defaults: defaults)
-    }
-
-    var isAccepted: Bool { defaults.string(forKey: Self.key) == version }
+    var isAccepted: Bool { defaults.integer(forKey: Self.key) == Self.policyVersion }
 
     func accept() {
-        defaults.set(version, forKey: Self.key)
+        defaults.set(Self.policyVersion, forKey: Self.key)
     }
 }
 
@@ -31,8 +30,13 @@ struct WelcomeView: View {
     let onQuit: () -> Void
 
     @ObservedObject private var suppression: AudioSuppressionEngine
+    @ObservedObject private var settings: SettingsStore
+    @AppStorage("RequestedSystemAudioRecordingDuringSetup") private var requestedAudioPermission = false
     @State private var accessibilityGranted = AXIsProcessTrusted()
-    @State private var notificationStatus = ""
+    @State private var notificationAuthorization: UNAuthorizationStatus?
+    @State private var notificationError: String?
+    @State private var requestingNotifications = false
+    @State private var enablingNotificationsFromSettings = false
     @State private var checkingAudioPermission = false
     @State private var document: SetupDocument?
 
@@ -46,6 +50,7 @@ struct WelcomeView: View {
         self.onContinue = onContinue
         self.onQuit = onQuit
         self.suppression = core.suppressionEngine
+        self.settings = core.settingsStore
     }
 
     var body: some View {
@@ -76,30 +81,30 @@ struct WelcomeView: View {
                             Divider()
                             LabeledContent {
                                 HStack {
-                                    Button("Request", action: requestAudioPermission)
-                                        .disabled(checkingAudioPermission)
-                                    Button("Open Settings") { openSettings("Privacy_AudioCapture") }
+                                    if !requestedAudioPermission {
+                                        Button("Request", action: requestAudioPermission)
+                                            .disabled(checkingAudioPermission)
+                                    }
+                                    Button("Open Settings", action: SystemAudioRecordingSettings.open)
                                 }
                             } label: {
-                                permissionDescription("System Audio Recording", "Lets CallTone Mac mute the original ringtone. The audio from the tap is discarded. \(suppression.permissionStatus.rawValue).")
+                                permissionDescription("System Audio Recording", requestedAudioPermission
+                                    ? "Manage access in System Settings."
+                                    : "Allows CallTone Mac to mute the original ringtone. CallTone Mac does not save audio from the tap.")
                             }
                             if let error = suppression.lastErrorMessage {
                                 Text(error).font(.caption).foregroundStyle(.secondary)
                             }
                             Divider()
                             LabeledContent {
-                                Button("Enable") {
-                                    Task {
-                                        let allowed = (try? await UNUserNotificationCenter.current()
-                                            .requestAuthorization(options: [.alert])) ?? false
-                                        if allowed { core.settingsStore.showCallToneNotifications = true }
-                                        notificationStatus = allowed
-                                            ? "Enabled."
-                                            : "Unavailable. You can manage access in System Settings → Notifications."
-                                    }
-                                }
+                                Button(notificationButtonTitle, action: enableNotifications)
+                                    .disabled(requestingNotifications || notificationAuthorization == nil || notificationsEnabled)
                             } label: {
-                                permissionDescription("Notifications (optional)", "Shows a local alert when a custom ringtone starts. \(notificationStatus)")
+                                permissionDescription("Notifications (optional)", notificationError ?? (
+                                    notificationAuthorization == .denied
+                                    ? "Allow notifications for CallTone Mac in System Settings."
+                                    : "Shows a local alert when a custom ringtone starts."
+                                ))
                             }
                         }
                         .padding(8)
@@ -127,7 +132,7 @@ struct WelcomeView: View {
                 Spacer()
                 Button("Agree and Continue", action: onContinue)
                     .buttonStyle(.borderedProminent)
-                    .disabled(checkingAudioPermission)
+                    .disabled(checkingAudioPermission || requestingNotifications)
             }
             .padding(16)
         }
@@ -146,12 +151,64 @@ struct WelcomeView: View {
             .padding(24)
             .frame(width: 560, height: 420)
         }
+        .background(StartInMenuBar(needsSetup: true))
+        .onAppear { MenuBarActivation.keepAccessoryPolicy() }
+        .task { await refreshNotificationAuthorization() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             accessibilityGranted = AXIsProcessTrusted()
+            Task { await refreshNotificationAuthorization() }
+        }
+    }
+
+    private var notificationsAllowed: Bool {
+        notificationAuthorization == .authorized || notificationAuthorization == .provisional
+    }
+
+    private var notificationsEnabled: Bool {
+        notificationsAllowed && settings.showCallToneNotifications
+    }
+
+    private var notificationButtonTitle: String {
+        if notificationAuthorization == .denied { return "Open Settings" }
+        return notificationsEnabled ? "Enabled" : "Enable"
+    }
+
+    private func refreshNotificationAuthorization() async {
+        notificationAuthorization = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+        if enablingNotificationsFromSettings && notificationsAllowed {
+            settings.showCallToneNotifications = true
+            enablingNotificationsFromSettings = false
+        }
+    }
+
+    private func enableNotifications() {
+        notificationError = nil
+        if notificationAuthorization == .denied {
+            enablingNotificationsFromSettings = true
+            CallToneNotifications.openSettings()
+            return
+        }
+        if notificationsAllowed {
+            settings.showCallToneNotifications = true
+            return
+        }
+        requestingNotifications = true
+        Task {
+            defer { requestingNotifications = false }
+            do {
+                if try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) {
+                    settings.showCallToneNotifications = true
+                }
+            } catch {
+                notificationError = "Could not enable notifications. \(error.localizedDescription)"
+            }
+            await refreshNotificationAuthorization()
         }
     }
 
     private func requestAudioPermission() {
+        guard !requestedAudioPermission, !checkingAudioPermission else { return }
+        requestedAudioPermission = true
         checkingAudioPermission = true
         Task { @MainActor in
             defer { checkingAudioPermission = false }
@@ -188,6 +245,15 @@ struct WelcomeView: View {
 
     private func openSettings(_ anchor: String) {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+}
+
+enum SystemAudioRecordingSettings {
+    @MainActor
+    static func open() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture") {
             NSWorkspace.shared.open(url)
         }
     }

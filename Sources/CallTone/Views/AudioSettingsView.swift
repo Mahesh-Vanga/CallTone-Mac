@@ -99,9 +99,7 @@ struct AudioSettingsView: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Button("Verify Tap Permission") {
-                        suppression.triggerAudioCapturePermissionProbe()
-                    }
+                    Button("Open System Audio Recording Settings", action: SystemAudioRecordingSettings.open)
                 }
 
                 if let error = suppression.lastErrorMessage {

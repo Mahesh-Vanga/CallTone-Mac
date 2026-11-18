@@ -62,8 +62,11 @@ struct DashboardView: View {
             }
             .padding(24)
         }
+        .background(StartInMenuBar(needsSetup: false))
         .navigationTitle("Dashboard")
         .onAppear {
+            MenuBarActivation.keepAccessoryPolicy()
+            CallToneNotifications.shared.connect(library.additionalCalls, settings: settings)
             library.additionalCalls.connect(settings: settings, library: library, monitor: monitor)
         }
     }
