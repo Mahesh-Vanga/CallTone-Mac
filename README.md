@@ -6,11 +6,11 @@ Open-source native Swift & SwiftUI ringtone replacement utility for Apple Silico
 
 ## Demo
 
-These illustrations use sample data and contain no captured desktop or personal app data.
+These screenshots show CallTone Mac running in dark mode with its built-in ringtones.
 
-![Dashboard demo with a Continuity call](docs/demo/dashboard.png)
-![Ringtone library demo with sample tones](docs/demo/library.png)
-![Waveform trimmer demo with an example selection](docs/demo/trimmer.png)
+![CallTone Mac Dashboard](docs/demo/dashboard.png)
+![CallTone Mac Ringtone Library with five built-in tones](docs/demo/library.png)
+![CallTone Mac waveform trimmer with a selection](docs/demo/trimmer.png)
 
 ## Key Features
 
