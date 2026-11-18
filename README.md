@@ -10,6 +10,10 @@ These screenshots show CallTone Mac running in dark mode with its built-in ringt
 
 ![CallTone Mac Dashboard](docs/demo/dashboard.png)
 ![CallTone Mac Ringtone Library with five built-in tones](docs/demo/library.png)
+![CallTone Mac Calling Applications and per-app ringtone assignments](docs/demo/calling-applications.png)
+![CallTone Mac Audio Settings for playback, output routing, and ringtone suppression](docs/demo/audio-settings.png)
+![CallTone Mac General Settings for updates, background operation, appearance, and macOS permissions](docs/demo/general-settings.png)
+![CallTone Mac General Settings showing Privacy & Storage and About](docs/demo/general-settings-about.png)
 ![CallTone Mac waveform trimmer with a selection](docs/demo/trimmer.png)
 
 ## Key Features
