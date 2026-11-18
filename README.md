@@ -4,7 +4,7 @@
 
 **Your music for incoming calls on macOS.** Replace a calling app’s ringtone with a single tone or a shared playlist. CallTone runs in the menu bar and processes calls and audio locally.
 
-**Version 1.0.2 · Apple Silicon · macOS 14.2 or later · MIT**
+**Version 1.0.2 · Apple Silicon · macOS 14.2 or later · [MIT License](LICENSE)**
 
 [Download DMG](https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.2/CallTone-Mac-1.0.2.dmg) · [Download PKG](https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.2/CallTone-Mac-1.0.2.pkg) · [Download ZIP](https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.2/CallTone-Mac-1.0.2.zip) · [What’s new in 1.0.2](https://github.com/Mahesh-Vanga/CallTone-Mac/releases/tag/v1.0.2)
 
@@ -27,14 +27,14 @@
 | [PKG](https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.2/CallTone-Mac-1.0.2.pkg) | Open the package and follow the macOS Installer prompts. |
 | [ZIP](https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.2/CallTone-Mac-1.0.2.zip) | Extract the archive and move **CallTone Mac.app** into **Applications**. |
 
-The GitHub downloads are **Developer ID signed and Apple-notarized**. macOS can still ask you to confirm the first launch of an app downloaded from the internet. macOS also asks separately for any permissions you choose to grant. [Apple’s Gatekeeper guide](https://support.apple.com/en-us/102445)
+All three v1.0.2 downloads pass Gatekeeper as **Notarized Developer ID**. macOS can show its standard first-open confirmation for apps downloaded from the internet. Select **Open** when the dialog identifies CallTone Mac as the app you downloaded. The PKG may request administrator authorization, and optional app permissions have their own prompts. [Apple’s Gatekeeper guide](https://support.apple.com/en-us/102445)
 
 ### First launch
 
 1. Open CallTone Mac from **Applications**.
 2. Click the menu bar icon and choose **Open CallTone Mac**. You can also open the app again from Applications.
 3. Review the welcome screen and choose **Agree and Continue**.
-4. Enable your calling apps under **Calling Applications** and pick a ringtone mode in **Ringtone Library**.
+4. Enable your calling apps under **Calling Applications** and pick a ringtone mode in **Ringtone Library**. If monitoring is paused, choose **Start Monitoring** on the Dashboard.
 
 | macOS permission | Purpose |
 | --- | --- |
@@ -47,10 +47,10 @@ The GitHub downloads are **Developer ID signed and Apple-notarized**. macOS can 
 
 | Feature | What you can do |
 | --- | --- |
-| **Single, Sequential, and Shuffle** | Choose a default tone or per-app tones in Single mode. Sequential follows the order you set. Shuffle plays each selected tone once per cycle and avoids immediate repeats when several tones are selected. Playlist modes share one queue across calling apps and prepare the next track after ringing stops. |
+| **Single, Sequential, and Shuffle** | Choose a default tone or per-app tones in Single mode. Sequential follows the order you set. Shuffle plays each selected tone once per cycle and avoids immediate repeats when several tones are selected. Playlist modes share one queue across calling apps and prepare the next track after ringing stops. **Simulate Call** advances that queue too. |
 | **Calling app profiles** | Enable iPhone Continuity, FaceTime, WhatsApp, Telegram, Signal, Zoom, Microsoft Teams, Google Meet, and Discord individually. Use **Add Custom App** to select one or more installed macOS apps. |
 | **Native ringtone muting** | CallTone attempts to mute audio attributable to the ringing app while your tone plays. Custom apps need recognizable incoming-call controls. For Google Meet, keep the Meet tab or web app open. Its original ring can still be heard when Meet shares the browser’s audio process. |
-| **Ringtone library** | Use five built-in tones or import MP3, WAV, M4A, M4R, CAF, AAC, AIFF, and FLAC. Preview, rename, duplicate, reorder, and export clips. |
+| **Ringtone library** | Use five built-in tones or import MP3, WAV, M4A, M4R, CAF, AAC, AIFF, and FLAC. Preview, rename, duplicate, delete, reveal files in Finder, and export trimmed M4A clips. |
 | **Waveform editing** | Trim a clip, set volume, set fade-in and fade-out, toggle looping, and preview before saving. |
 | **Status and testing** | Check monitoring and permission status, view recent detection activity, simulate a call, test a calling app’s tone, or send a test notification. |
 | **Audio and appearance** | Set master volume and the output device. Choose System, Light, or Dark appearance. |
@@ -86,13 +86,13 @@ Choose **Trim & Edit**. Drag the waveform handles or enter exact start and end p
 
 ### Calling Applications
 
-Search by app name, bundle identifier, or process name. Enable profiles, run **Test** to check playback, inspect detection details, and use the app picker to add installed apps. Assign app-specific tones in Single mode.
+Search by app name, bundle identifier, or process name. Enable profiles, run **Test** to check playback, inspect detection details, and use the app picker to add installed apps. You can remove custom profiles from this screen. Assign app-specific tones in Single mode.
 
 <img src="docs/demo/calling-applications.png" width="860" alt="Calling Applications with profile toggles, ringtone assignments, and Add Custom App">
 
 ### Audio Settings
 
-Choose an output device, test playback, and adjust master volume, fades, and looping. This is also where you can review native ringtone muting and open System Audio Recording settings.
+Choose an output device, test playback, and adjust master volume, fades, and looping. Use **Refresh Audio Devices** after connecting hardware. The audio stream fallback can help detect WhatsApp, Telegram, Zoom, Teams, and Signal calls when window inspection is unavailable and the microphone is inactive. **Mute All Enabled Calling Apps During Ring** extends suppression to enabled apps. Open System Audio Recording settings here to manage access.
 
 <img src="docs/demo/audio-settings.png" width="860" alt="Audio Settings showing output routing, playback controls, and ringtone muting settings">
 
@@ -102,7 +102,12 @@ Manage launch at login, automatic monitoring, the menu bar icon, notifications, 
 
 <img src="docs/demo/general-settings.png" width="860" alt="General Settings with login, monitoring, and notification controls">
 
-[View privacy, storage, and About](docs/demo/general-settings-about.png)
+<details>
+<summary>Privacy, storage, and About</summary>
+
+<img src="docs/demo/general-settings-about.png" width="860" alt="General Settings showing the privacy policy, local storage location, installed version, and MIT License">
+
+</details>
 
 ### Menu bar and shortcuts
 
@@ -111,6 +116,7 @@ Use the menu bar to open CallTone, pause or resume monitoring, switch the shared
 | Shortcut | Action |
 | --- | --- |
 | ⌘1 through ⌘5 | Dashboard, Ringtone Library, Calling Applications, Audio Settings, General Settings |
+| ⌘I | Import audio in Ringtone Library |
 | ⇧⌘M | Toggle monitoring |
 | ⌘. | Stop the current ringtone or preview |
 
@@ -122,9 +128,9 @@ For a first install on an Apple Silicon Mac, choose one format. For an update, q
 <summary>DMG · Download, verify, and copy to Applications</summary>
 
 ```bash
-work="$(mktemp -d)"
 (
   set -e
+  work="$(mktemp -d)"
   cd "$work"
   curl --fail --location --remote-name \
     https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.2/CallTone-Mac-1.0.2.dmg
@@ -144,12 +150,13 @@ work="$(mktemp -d)"
 <summary>PKG · Download, verify, and install</summary>
 
 ```bash
-work="$(mktemp -d)"
 (
   set -e
+  work="$(mktemp -d)"
   cd "$work"
   curl --fail --location --remote-name \
     https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.2/CallTone-Mac-1.0.2.pkg
+  pkgutil --check-signature CallTone-Mac-1.0.2.pkg
   spctl --assess --type install --verbose=2 CallTone-Mac-1.0.2.pkg
   sudo installer -pkg CallTone-Mac-1.0.2.pkg -target /
   open "/Applications/CallTone Mac.app"
@@ -162,9 +169,9 @@ work="$(mktemp -d)"
 <summary>ZIP · Download, verify, and copy to Applications</summary>
 
 ```bash
-work="$(mktemp -d)"
 (
   set -e
+  work="$(mktemp -d)"
   cd "$work"
   curl --fail --location --remote-name \
     https://github.com/Mahesh-Vanga/CallTone-Mac/releases/download/v1.0.2/CallTone-Mac-1.0.2.zip
@@ -179,7 +186,7 @@ work="$(mktemp -d)"
 
 </details>
 
-A successful Gatekeeper check reports `accepted` and `source=Notarized Developer ID`. The DMG and ZIP commands expect an empty destination. If your account cannot write to **Applications**, complete the copy in Finder.
+A successful Gatekeeper check reports `accepted` and `source=Notarized Developer ID`. The DMG and ZIP commands expect an empty destination. If your account cannot write to **Applications**, complete the copy in Finder. To reopen the installed app from Terminal, run `open "/Applications/CallTone Mac.app"`. After startup, run it again to show the app window.
 
 ## Update or uninstall
 
@@ -251,4 +258,4 @@ spctl --assess --type install --verbose=2 dist/CallTone-Mac-1.0.2.pkg
 
 ## License
 
-CallTone Mac is open source under the [MIT License](LICENSE). See the [source](Sources/CallTone), [tests](Tests/CallToneTests), and [packaging scripts](scripts). To report a problem, include your macOS version, CallTone version, calling app, and steps to reproduce. Remove caller information from any screenshots. [Report an issue](https://github.com/Mahesh-Vanga/CallTone-Mac/issues)
+CallTone Mac is open source under the [MIT License](LICENSE). You may use, modify, and redistribute it with the copyright and license notices included. The software is provided as is. See the [source](Sources/CallTone), [tests](Tests/CallToneTests), and [packaging scripts](scripts). To report a problem, include your macOS version, CallTone version, calling app, and steps to reproduce. Remove caller information from any screenshots. [Report an issue](https://github.com/Mahesh-Vanga/CallTone-Mac/issues)
