@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>CallTone Mac</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.calltone.macos</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>CallTone Mac</string>
+    <key>CFBundleDisplayName</key>
+    <string>CallTone Mac</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CallToneUpdateRepository</key>
+    <string>Mahesh-Vanga/CallTone-Mac</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>CFBundleVersion</key>
+    <string>8</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.2</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.utilities</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSSupportsAutomaticTermination</key>
+    <false/>
+    <key>NSSupportsSuddenTermination</key>
+    <false/>
+    <key>NSAudioCaptureUsageDescription</key>
+    <string>CallTone Mac needs System Audio Recording access to mute the original calling app's default ringtone so only your custom ringtone plays.</string>
+    <key>NSHumanReadableCopyright</key>
+    <string>Copyright © 2026 CallTone Mac. Open-source local macOS utility.</string>
+</dict>
+</plist>
